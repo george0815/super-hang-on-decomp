@@ -1,0 +1,11 @@
+# Press Start on the title, then keep pressing Start/A through menus, then hold accelerate (B) and steer
+420 425 S
+520 525 S
+620 625 S
+720 725 S
+820 825 S
+920 925 S
+1020 1025 S
+1100 3000 B
+1400 1500 R
+1700 1800 L

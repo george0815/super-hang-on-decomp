@@ -1,0 +1,18 @@
+# Never commit the ROM or anything extracted from it
+*.md
+!README.md
+!docs/*.md
+*.bin
+*.gen
+baserom.*
+build/
+assets/
+__pycache__/
+
+# Third-party reference material, kept local only
+genesis-plus-gx/
+docs/*.pdf
+tools/bin/
+tools/trace/gpgx_trace
+tools/trace/gpgx_fncap
+tools/trace/obj_hook/

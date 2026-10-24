@@ -1,0 +1,191 @@
+/*
+ * Headless reference tracer built on the Genesis Plus GX core.
+ *
+ * Runs a ROM for N frames with scripted pad input and records, at the end
+ * of every frame, the 68000 registers and the 64 KB work RAM. The trace is
+ * the ground truth the native port is compared against.
+ *
+ * usage: gpgx_trace ROM FRAMES OUT.trace [-i input.txt] [-s FRAME]... [-d DIR]
+ *
+ * input.txt lines:  FIRST LAST BUTTONS   (frames inclusive; buttons from
+ *                   "UDLRABCS", e.g. "200 210 S" holds Start)
+ * -s FRAME          also write DIR/frame_NNNNN.ppm and DIR/frame_NNNNN.vdp
+ *                   (VRAM, CRAM, VSRAM, registers) for that frame
+ *
+ * Trace file: "SHOTRACE" u32 version, u32 frames, then per frame
+ * (all big-endian): u32 frame, u32 d0-d7, u32 a0-a7, u32 pc, u32 sr,
+ * 65536 bytes work RAM ($FF0000-$FFFFFF).
+ */
+
+#include "shared.h"
+#include "md_ntsc.h"
+#include "sms_ntsc.h"
+
+/* symbols the core expects from the frontend */
+int debug_on = 0;
+int log_error = 0;
+md_ntsc_t *md_ntsc;
+sms_ntsc_t *sms_ntsc;
+
+#define MAX_INPUT 4096
+static struct { int first, last; uint16 pad; } script[MAX_INPUT];
+static int nscript;
+static int cur_frame;
+
+int sdl_input_update(void)
+{
+  int i;
+  uint16 pad = 0;
+  for (i = 0; i < nscript; i++)
+    if (cur_frame >= script[i].first && cur_frame <= script[i].last)
+      pad |= script[i].pad;
+  input.pad[0] = pad;
+  return 1;
+}
+
+static void load_script(const char *path)
+{
+  char line[256], btn[64];
+  FILE *f = fopen(path, "r");
+  if (!f) { perror(path); exit(1); }
+  while (fgets(line, sizeof line, f) && nscript < MAX_INPUT)
+  {
+    int a, b;
+    char *c;
+    uint16 pad = 0;
+    if (line[0] == '#' || sscanf(line, "%d %d %63s", &a, &b, btn) != 3)
+      continue;
+    for (c = btn; *c; c++)
+      switch (*c)
+      {
+        case 'U': pad |= INPUT_UP; break;
+        case 'D': pad |= INPUT_DOWN; break;
+        case 'L': pad |= INPUT_LEFT; break;
+        case 'R': pad |= INPUT_RIGHT; break;
+        case 'A': pad |= INPUT_A; break;
+        case 'B': pad |= INPUT_B; break;
+        case 'C': pad |= INPUT_C; break;
+        case 'S': pad |= INPUT_START; break;
+      }
+    script[nscript].first = a;
+    script[nscript].last = b;
+    script[nscript].pad = pad;
+    nscript++;
+  }
+  fclose(f);
+}
+
+static void put32(FILE *f, uint32 v)
+{
+  uint8 b[4] = { v >> 24, v >> 16, v >> 8, v };
+  fwrite(b, 1, 4, f);
+}
+
+static void write_shot(const char *dir, int frame)
+{
+  char path[512];
+  int x, y;
+  FILE *f;
+  uint8 buf[0x10000];
+
+  snprintf(path, sizeof path, "%s/frame_%05d.ppm", dir, frame);
+  f = fopen(path, "wb");
+  if (!f) { perror(path); return; }
+  fprintf(f, "P6\n%d %d\n255\n", bitmap.viewport.w, bitmap.viewport.h);
+  for (y = 0; y < bitmap.viewport.h; y++)
+  {
+    uint16 *row = (uint16 *)(bitmap.data + (y + bitmap.viewport.y) * bitmap.pitch)
+                  + bitmap.viewport.x;
+    for (x = 0; x < bitmap.viewport.w; x++)
+    {
+      uint16 p = row[x];
+      uint8 rgb[3] = { (p >> 11) << 3, ((p >> 5) & 0x3f) << 2, (p & 0x1f) << 3 };
+      fwrite(rgb, 1, 3, f);
+    }
+  }
+  fclose(f);
+
+  /* VDP memories, byte-swapped back to big-endian where the core keeps
+     them in host order */
+  snprintf(path, sizeof path, "%s/frame_%05d.vdp", dir, frame);
+  f = fopen(path, "wb");
+  if (!f) { perror(path); return; }
+  for (x = 0; x < 0x10000; x++) buf[x] = READ_BYTE(vram, x);
+  fwrite(buf, 1, 0x10000, f);
+  for (x = 0; x < 0x80; x++) buf[x] = READ_BYTE(cram, x);
+  fwrite(buf, 1, 0x80, f);
+  for (x = 0; x < 0x80; x++) buf[x] = READ_BYTE(vsram, x);
+  fwrite(buf, 1, 0x80, f);
+  fwrite(reg, 1, 0x20, f);
+  fclose(f);
+}
+
+int main(int argc, char **argv)
+{
+  static uint8 ram[0x10000];
+  static int shots[256];
+  int nshots = 0, frames, i, r;
+  const char *dir = ".";
+  FILE *out;
+
+  if (argc < 4)
+  {
+    fprintf(stderr, "usage: %s ROM FRAMES OUT.trace [-i input.txt] [-s FRAME]... [-d DIR]\n", argv[0]);
+    return 1;
+  }
+  frames = atoi(argv[2]);
+  for (i = 4; i < argc; i++)
+  {
+    if (!strcmp(argv[i], "-i") && i + 1 < argc) load_script(argv[++i]);
+    else if (!strcmp(argv[i], "-s") && i + 1 < argc && nshots < 256) shots[nshots++] = atoi(argv[++i]);
+    else if (!strcmp(argv[i], "-d") && i + 1 < argc) dir = argv[++i];
+  }
+
+  error_init();
+  set_config_defaults();
+  system_bios = 0;
+  memset(boot_rom, 0xff, sizeof(boot_rom));
+
+  memset(&bitmap, 0, sizeof(t_bitmap));
+  bitmap.width = 720;
+  bitmap.height = 576;
+  bitmap.pitch = bitmap.width * 2;
+  bitmap.data = calloc(bitmap.pitch, bitmap.height);
+  bitmap.viewport.changed = 3;
+
+  if (!load_rom(argv[1]))
+  {
+    fprintf(stderr, "cannot load %s\n", argv[1]);
+    return 1;
+  }
+  audio_init(44100, 0);
+  system_init();
+  system_reset();
+
+  out = fopen(argv[3], "wb");
+  if (!out) { perror(argv[3]); return 1; }
+  fwrite("SHOTRACE", 1, 8, out);
+  put32(out, 1);
+  put32(out, frames);
+
+  for (cur_frame = 0; cur_frame < frames; cur_frame++)
+  {
+    int16 snd[4096 * 2];
+    system_frame_gen(0);
+    audio_update(snd);
+
+    put32(out, cur_frame);
+    for (r = M68K_REG_D0; r <= M68K_REG_A7; r++)
+      put32(out, m68k_get_reg(r));
+    put32(out, m68k_get_reg(M68K_REG_PC));
+    put32(out, m68k_get_reg(M68K_REG_SR));
+    for (i = 0; i < 0x10000; i++) ram[i] = READ_BYTE(work_ram, i);
+    fwrite(ram, 1, sizeof ram, out);
+
+    for (i = 0; i < nshots; i++)
+      if (shots[i] == cur_frame)
+        write_shot(dir, cur_frame);
+  }
+  fclose(out);
+  return 0;
+}

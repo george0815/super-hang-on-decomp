@@ -1,0 +1,29 @@
+; Disassembler hints for Super Hang-On (GM 00004011-00)
+;   code ADDR [NAME]        extra code entry point
+;   name ADDR NAME          symbol name
+;   jtbl ADDR COUNT [STRIDE] table of COUNT code slots, STRIDE bytes apart
+;   ptrs ADDR COUNT         table of longword code pointers
+;   data START END [NAME]   known data region
+;   alias ADDR RAMADDR      code at ADDR is copied to and run from RAMADDR
+;   ijmp SITE T1 T2...      indirect jmp/jsr at SITE with possible targets
+;   noret ADDR              call never returns
+
+name 006BAC EntryPoint
+name 006D2A VBlank
+name 006CF2 GameModeTable
+
+; object handler table, indexed by object word 0 (see $7194)
+jtbl 00710A 25
+; computed jump into a run of andi.w instructions (see $5F68)
+jtbl 005F6C 4
+; 9 x 16-byte stubs loading VDP params (see $7C16)
+jtbl 007C5E 9 16
+; jump table at $E92C: index 4/8/12
+jtbl 00E930 3
+; decompressor output callbacks (lea into a3 at $8562/$8574, +$A at $8584)
+ijmp 0085EA 008622 00862C 008638 008642
+; jump table at $F08C indexed by (a6)+4 & 3
+jtbl 00F08C 4
+; HBlank handler, copied to RAM $FF05D2 at $6D8E (level-4 vector points there)
+code 006DA6 HBlankRAM
+alias 006DA6 FF05D2
