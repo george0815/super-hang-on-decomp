@@ -27,6 +27,8 @@ uint64_t m68k_icount, m68k_icount_event = UINT64_MAX;
 int64_t m68k_cycles, m68k_cycles_event = INT64_MAX;
 
 void m68k_event(uint32_t pc) { (void)pc; }
+int verify_mode;
+void verify_call(uint32_t a, const char *n, void (*o)(void), void (*h)(void), uint64_t m) { (void)a; (void)n; (void)h; (void)m; o(); }
 
 typedef struct { uint8_t kind, width; uint32_t addr, value; } IoEntry;
 

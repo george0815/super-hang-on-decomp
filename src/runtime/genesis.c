@@ -7,6 +7,7 @@
 #include "genesis.h"
 #include "vdp.h"
 #include "sound.h"
+#include "verify.h"
 
 M68kState cpu;
 uint8_t m68k_ram[0x10000];
@@ -53,6 +54,8 @@ static uint8_t pad_read(int port)
 static uint32_t io_read(int width, uint32_t a)
 {
     uint32_t v = 0;
+    if (verify_mode && verify_hw_read(width, a, &v))
+        return v;
     if (a >= 0xc00000 && a < 0xc00020) {
         switch (a & 0x1e) {
         case 0x00: case 0x02: v = vdp_read_data(); break;
@@ -80,11 +83,15 @@ static uint32_t io_read(int width, uint32_t a)
     }
     if (gen_replay)
         v = gen_replay->hw_read(width, a, v);
+    if (verify_mode)
+        verify_hw_log_read(width, a, v);
     return v;
 }
 
 static void io_write(int width, uint32_t a, uint32_t v)
 {
+    if (verify_mode && verify_hw_write(width, a, v))
+        return;
     if (a >= 0xc00000 && a < 0xc00020) {
         if (width == 1) {
             if ((a & 0x1f) == 0x11) return;    /* PSG: sound not modelled yet */
@@ -167,6 +174,7 @@ static void hblank_handler(void)
 
 void gen_take_irq(int level, uint32_t pc)
 {
+    verify_interrupt();
     push32(pc);
     push16(get_sr());
     cpu.sr_hi = (uint8_t)((cpu.sr_hi & 0xf8) | 0x20 | level);

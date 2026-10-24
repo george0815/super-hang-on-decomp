@@ -30,6 +30,9 @@ Put it in the repo root. It is gitignored.
 - `tools/trace/`: reference tools built on a local Genesis Plus GX checkout (not included):
   - `gpgx_trace`: headless run with scripted input; dumps registers and RAM every frame, plus screenshots
   - `gpgx_fncap`: records function entry/exit state and hardware access logs
+- `tools/flow.py`: register dataflow; each function's real inputs and outputs (`build/recomp/interfaces.txt`)
+- `src/game/`: handwritten game code, replacing recompiled functions listed in `config/handwritten.txt`
+- `src/runtime/verify.c`: runs each handwritten function side by side with its original during a replay
 - `tests/fntest.c`: replays the recorded samples against the recompiled C
 - `tests/replay.c`: whole-game replay; interrupts and hardware reads come from a reference recording, and the state is compared at every VBlank
 - `tests/livetest.c`: headless live-mode run with scripted input and screenshots
@@ -66,6 +69,7 @@ Differential testing needs Genesis Plus GX cloned into `genesis-plus-gx/`:
         -s build/ref/race.snd -z build/ref/race.zram
     make fntest    # per-function samples
     make replay    # whole game, compared at every VBlank
+    make verify    # replay + every handwritten function checked against its original
     build/replay sho.md build/ref/race.events build/ref/race.vtrace --zram build/ref/race.zram
                    # also compares sound driver RAM at every Z80 interrupt
 
@@ -80,3 +84,15 @@ Differential testing needs Genesis Plus GX cloned into `genesis-plus-gx/`:
 | `07D7F4-07F217`   | Z80 sound driver (copied to Z80 RAM at `$6E50`) |
 
 Entry points: entry point `$6BAC`, VBlank `$6D2A`, HBlank `$FF05D2` (RAM copy of `$6DA6`).
+
+## Rewriting in readable C
+
+The recompiled code is a stepping stone. Functions are replaced by
+handwritten C in `src/game/`, registered in `config/handwritten.txt`. Each
+handwritten routine is a normal C function; a small `_68k` adapter
+translates to the original register interface for recompiled callers (the
+interface comes from `tools/flow.py`). `make verify` replays the reference
+session and runs every handwritten function next to its original on the same
+inputs, comparing RAM, output registers and hardware accesses. Subsystems are
+rewritten as a whole where possible, so only their entry points need
+adapters.

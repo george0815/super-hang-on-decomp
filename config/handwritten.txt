@@ -1,0 +1,10 @@
+# Functions replaced by handwritten C (src/game).
+#   ADDR  c_function_name
+0081E8  vdp_init_registers_68k
+0083DC  vdp_copy_68k
+0083F8  vdp_fill_zero_68k
+0083FA  vdp_fill_68k
+00840E  vdp_copy_rect_68k
+0084C2  rng_next_68k
+006E8C  sound_command_68k
+00709A  obj_add_to_layer_68k

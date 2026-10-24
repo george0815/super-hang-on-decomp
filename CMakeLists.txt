@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 project(shangon C)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Your own copy of the game; nothing from it is stored in this repository.
 set(SHO_ROM "${CMAKE_SOURCE_DIR}/sho.md" CACHE FILEPATH "Super Hang-On ROM (GM 00004011-00)")
@@ -34,8 +35,11 @@ add_custom_command(
     OUTPUT "${GEN_DIR}/sho_code.c" "${GEN_DIR}/sho_funcs.h"
     COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/tools/recomp.py" "${SHO_ROM}" "${GEN_DIR}"
     DEPENDS "${CMAKE_SOURCE_DIR}/tools/recomp.py" "${CMAKE_SOURCE_DIR}/tools/shodis.py"
-            "${CMAKE_SOURCE_DIR}/tools/m68k.py" "${CMAKE_SOURCE_DIR}/config/hints.txt" "${SHO_ROM}"
+            "${CMAKE_SOURCE_DIR}/tools/m68k.py" "${CMAKE_SOURCE_DIR}/tools/flow.py"
+            "${CMAKE_SOURCE_DIR}/config/hints.txt" "${CMAKE_SOURCE_DIR}/config/handwritten.txt" "${SHO_ROM}"
     COMMENT "Generating code from ROM")
+
+file(GLOB GAME_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/game/*.c")
 
 add_executable(shangon
     src/port/main.c
@@ -43,11 +47,13 @@ add_executable(shangon
     src/runtime/genesis.c
     src/runtime/vdp.c
     src/runtime/sound_host.c
+    src/runtime/verify.c
+    ${GAME_SOURCES}
     src/sound/ym2612.c
     src/sound/psg.c
     "${GEN_DIR}/sho_code.c"
     "${GEN_DIR}/z80_code.c")
-target_include_directories(shangon PRIVATE src/runtime "${GEN_DIR}")
+target_include_directories(shangon PRIVATE src/runtime src/game "${GEN_DIR}")
 target_link_libraries(shangon PRIVATE SDL3::SDL3)
 if(NOT MSVC)
     target_link_libraries(shangon PRIVATE m)

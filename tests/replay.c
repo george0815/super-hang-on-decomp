@@ -8,7 +8,11 @@
  * --resync is given, in which case RAM and registers are copied from the
  * reference and the run continues.
  *
- * usage: replay ROM EVENTS VTRACE [--resync] [--shot FRAME DIR]...
+ * usage: replay ROM EVENTS VTRACE [--verify] [--resync] [--shot FRAME DIR]...
+ *
+ * The replay always runs the recompiled originals (exact instruction counts
+ * are what place the recorded interrupts). --verify additionally runs each
+ * handwritten function side by side with its original (src/runtime/verify.c).
  */
 #include <signal.h>
 #include <stdio.h>
@@ -21,6 +25,7 @@
 #include "genesis.h"
 #include "vdp.h"
 #include "sound.h"
+#include "verify.h"
 
 typedef struct { uint8_t kind; uint64_t icount; uint32_t pc; } Irq;
 typedef struct { uint8_t width; uint32_t addr, value; } Read;
@@ -90,7 +95,8 @@ static void load_events(const char *path)
 static void finish(void)
 {
     printf("%ld VBlanks compared, %ld mismatching\n", vcount, mismatches);
-    exit(mismatches != 0);
+    verify_report();
+    exit(mismatches != 0 || verify_failures != 0);
 }
 
 static void save_shot(int frame)
@@ -323,6 +329,7 @@ int main(int argc, char **argv)
     }
     for (i = 4; i < argc; i++) {
         if (!strcmp(argv[i], "--resync")) resync = 1;
+        else if (!strcmp(argv[i], "--verify")) verify_enabled = 1;
         else if (!strcmp(argv[i], "--zram") && i + 1 < argc)
             zsnap = gzopen(argv[++i], "rb");
         else if (!strcmp(argv[i], "--z80trace") && i + 1 < argc)  /* debug */
