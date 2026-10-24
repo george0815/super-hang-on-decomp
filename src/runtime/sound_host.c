@@ -67,10 +67,54 @@ void z80_write(uint16_t a, uint8_t v)
     }
 }
 
+SoundSettings sound_settings = { 100, { 100, 100, 100 }, FILTER_CONSOLE };
+
+/*
+ * Mix groups. The driver keeps 14 tracks of $30 bytes at $1C60: 0-5 are the
+ * music's FM parts, 6-7 the PSG tones the engine routine drives from the
+ * RPM value, and 8-13 sound effects, which take over a channel from the
+ * music while they play. Each output channel gets the volume of whoever
+ * owns it right now.
+ */
+#define TRACKS 0x1c60
+#define TRACK_SIZE 0x30
+
+static int track_output(int t)
+{
+    uint8_t ch = z80_ram[TRACKS + t * TRACK_SIZE + 1];
+    if (ch & 0x80)
+        return 6 + ((ch >> 5) & 3);      /* PSG 0-3 -> outputs 6-9 */
+    return (ch & 3) + ((ch & 4) ? 3 : 0); /* FM 0-5 */
+}
+
+static void update_mix(void)
+{
+    int group[10], i, t;
+    for (i = 0; i < 10; i++)
+        group[i] = SND_MUSIC;
+    for (t = 6; t < 14; t++) {
+        int o;
+        if (!(z80_ram[TRACKS + t * TRACK_SIZE] & 0x80))
+            continue;
+        o = track_output(t);
+        if (o > 9) continue;
+        if (t >= 8)
+            group[o] = SND_EFFECTS;
+        else if (group[o] != SND_EFFECTS)
+            group[o] = SND_ENGINE;
+    }
+    for (i = 0; i < 10; i++) {
+        float g = sound_settings.master * sound_settings.group[group[i]] / 10000.0f;
+        if (i < 6) ym_set_gain(i, g);
+        else psg_set_gain(i - 6, g);
+    }
+}
+
 static void call(void (*fn)(void))
 {
     z_push(0xffff);
     fn();
+    update_mix();
 }
 
 void sound_reset_line(int running)

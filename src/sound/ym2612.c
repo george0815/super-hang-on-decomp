@@ -17,9 +17,18 @@ int sound_buffered;
 uint64_t ym_samples;   /* total samples rendered (for timestamps in tests) */
 
 /* The console's analog output stage rounds off the highs; a one-pole
-   low-pass (~4.3 kHz at 53 kHz) gives the same softened sound. */
-#define LOWPASS_KEEP 0.6f
+   low-pass gives the same softened sound (console: ~4.3 kHz at 53 kHz). */
+static const float lowpass_keep[FILTER_MODES] = { 0.0f, 0.6f, 0.75f };
 static float lp_left, lp_right;
+
+/* per-channel volume from the mix settings, ramped to avoid clicks */
+static float gain_target[6] = { 1, 1, 1, 1, 1, 1 }, gain_now[6] = { 1, 1, 1, 1, 1, 1 };
+
+void ym_set_gain(int ch, float gain)
+{
+    if (ch >= 0 && ch < 6)
+        gain_target[ch] = gain;
+}
 
 void psg_render(int32_t *out, int samples);
 
@@ -360,6 +369,8 @@ void ym_render(int samples)
             } else {
                 v = channel_out(c, am);
             }
+            gain_now[ci] += (gain_target[ci] - gain_now[ci]) * 0.002f;
+            v = (int32_t)(v * gain_now[ci]);
             if (c->pan & 2) left += v;
             if (c->pan & 1) right += v;
             for (o = 0; o < 4; o++) {
@@ -375,8 +386,11 @@ void ym_render(int samples)
            per channel, FM channel sum x1.2) */
         left = left * 6 / 5 + psg[s];
         right = right * 6 / 5 + psg[s];
-        lp_left = lp_left * LOWPASS_KEEP + left * (1.0f - LOWPASS_KEEP);
-        lp_right = lp_right * LOWPASS_KEEP + right * (1.0f - LOWPASS_KEEP);
+        {
+            float k = lowpass_keep[sound_settings.filter % FILTER_MODES];
+            lp_left = lp_left * k + left * (1.0f - k);
+            lp_right = lp_right * k + right * (1.0f - k);
+        }
         left = (int32_t)lp_left;
         right = (int32_t)lp_right;
         if (left > 32767) left = 32767;

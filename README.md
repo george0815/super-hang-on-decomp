@@ -25,6 +25,7 @@ Put it in the repo root. It is gitignored.
 - `src/runtime/sound_host.c`: runs the recompiled Z80 sound driver (temporary)
 - `src/sound/ym2612.c`, `src/sound/psg.c`: native FM and PSG synthesizers
 - `src/port/main.c`: SDL3 frontend for the native port
+- `src/port/options.c`: options overlay (sound mix), saved between runs
 - `tools/z80.py`, `tools/z80dis.py`, `tools/z80recomp.py`: Z80 decoder, sound driver disassembler, and recompiler
 - `tools/trace/`: reference tools built on a local Genesis Plus GX checkout (not included):
   - `gpgx_trace`: headless run with scripted input; dumps registers and RAM every frame, plus screenshots
@@ -46,7 +47,10 @@ Put it in the repo root. It is gitignored.
 Playing:
 
     make port
-    build/shangon sho.md     # arrows, Z/X/C = A/B/C, Enter = Start, Esc = quit
+    build/shangon sho.md     # arrows, Z/X/C = A/B/C, Enter = Start, F1 = sound options, Esc = quit
+
+Sound options (F1) set master, music, engine and effects volume and the output
+filter; they are saved to `settings.ini` in the user's preferences folder.
 
 or with CMake (Linux, or Windows with SDL3 installed):
 

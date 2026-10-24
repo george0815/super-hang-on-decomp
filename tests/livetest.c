@@ -3,6 +3,7 @@
  * live hardware model, scripted pad input), saving screenshots.
  *
  * usage: livetest ROM FRAMES INPUT.txt OUTDIR [FRAME]...
+ * SHO_MIX=master,music,engine,effects (percent) overrides the sound mix.
  * Audio is written to OUTDIR/live.wav, the timed YM2612 register writes to
  * OUTDIR/live.ymlog.
  */
@@ -150,6 +151,10 @@ int main(int argc, char **argv)
         ymlog = fopen(path, "w");
         if (ymlog) sound_write_hook = log_ym;
     }
+    if (getenv("SHO_MIX"))
+        sscanf(getenv("SHO_MIX"), "%d,%d,%d,%d", &sound_settings.master,
+               &sound_settings.group[SND_MUSIC], &sound_settings.group[SND_ENGINE],
+               &sound_settings.group[SND_EFFECTS]);
     gen_init(rom, (uint32_t)len);
     gen_run();
     return 0;

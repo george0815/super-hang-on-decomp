@@ -26,6 +26,20 @@ void ym_write(int reg, uint8_t v);
 void psg_write(uint8_t v);
 void ym_render(int samples);          /* mixes FM + PSG into the output buffer */
 
+/* User mix settings (percent). Each output channel is assigned to a group
+   from what the driver is playing on it. */
+enum { SND_MUSIC, SND_ENGINE, SND_EFFECTS, SND_GROUPS };
+enum { FILTER_OFF, FILTER_CONSOLE, FILTER_SOFT, FILTER_MODES };
+typedef struct {
+    int master;
+    int group[SND_GROUPS];
+    int filter;
+} SoundSettings;
+extern SoundSettings sound_settings;
+
+void ym_set_gain(int ch, float gain);    /* FM channel 0-5 */
+void psg_set_gain(int ch, float gain);   /* PSG channel 0-3 (3 = noise) */
+
 /* mixed output, interleaved stereo at YM_RATE */
 extern int16_t sound_buffer[2 * 2048];
 extern int sound_buffered;            /* frames in sound_buffer */

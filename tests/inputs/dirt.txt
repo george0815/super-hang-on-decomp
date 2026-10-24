@@ -1,0 +1,10 @@
+# Into a race (as race.txt), then steer off the road onto the dirt and stay there
+420 425 S
+520 525 S
+620 625 S
+720 725 S
+820 825 S
+920 925 S
+1020 1025 S
+1100 2400 B
+1300 2400 R

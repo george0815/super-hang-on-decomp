@@ -7,7 +7,8 @@
  * usage: shangon [ROM]   (default: sho.md)
  *
  * Keys: arrows = steer / lean, Z = A (brake), X = B (accelerate), C = C,
- *       Enter = Start, Esc = quit. The first connected gamepad also works.
+ *       Enter = Start, F1 = sound options, Esc = quit. The first connected
+ *       gamepad also works.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,6 +18,7 @@
 #include "genesis.h"
 #include "vdp.h"
 #include "sound.h"
+#include "options.h"
 
 #define FRAME_NS 16683350ull  /* NTSC: 59.94 Hz */
 
@@ -31,6 +33,8 @@ static void poll_events(void)
 {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
+        if (options_event(&e))
+            continue;
         switch (e.type) {
         case SDL_EVENT_QUIT:
             exit(0);
@@ -52,20 +56,12 @@ static void poll_events(void)
     }
 }
 
-void host_frame(const uint8_t *pixels)
+static void present(const uint8_t *pixels)
 {
     uint32_t palette[64];
     void *dst;
     int pitch, i, y;
-    uint64_t now;
 
-    poll_events();
-    if (audio) {
-        /* keep latency bounded if video and audio clocks drift apart */
-        if (SDL_GetAudioStreamQueued(audio) < YM_RATE / 4 * 4)
-            SDL_PutAudioStreamData(audio, sound_buffer, sound_buffered * 4);
-    }
-    sound_buffered = 0;
     for (i = 0; i < 64; i++)
         palette[i] = vdp_color(i);
     if (SDL_LockTexture(texture, NULL, &dst, &pitch)) {
@@ -74,14 +70,17 @@ void host_frame(const uint8_t *pixels)
             for (i = 0; i < VDP_WIDTH; i++)
                 row[i] = palette[pixels[y * VDP_WIDTH + i]];
         }
+        options_draw((uint32_t *)dst, pitch / 4);
         SDL_UnlockTexture(texture);
     }
     SDL_RenderClear(renderer);
     SDL_RenderTexture(renderer, texture, NULL, NULL);
     SDL_RenderPresent(renderer);
+}
 
-    /* pace to the console's frame rate */
-    now = SDL_GetTicksNS();
+static void pace(void)
+{
+    uint64_t now = SDL_GetTicksNS();
     if (next_frame == 0 || now > next_frame + 4 * FRAME_NS)
         next_frame = now;
     next_frame += FRAME_NS;
@@ -89,11 +88,30 @@ void host_frame(const uint8_t *pixels)
         SDL_DelayNS(next_frame - now);
 }
 
+void host_frame(const uint8_t *pixels)
+{
+    poll_events();
+    if (audio && !options_open()) {
+        /* keep latency bounded if video and audio clocks drift apart */
+        if (SDL_GetAudioStreamQueued(audio) < YM_RATE / 4 * 4)
+            SDL_PutAudioStreamData(audio, sound_buffer, sound_buffered * 4);
+    }
+    sound_buffered = 0;
+    present(pixels);
+    pace();
+    /* the options overlay pauses the game */
+    while (options_open()) {
+        poll_events();
+        present(pixels);
+        pace();
+    }
+}
+
 uint16_t host_pad(int port)
 {
     const bool *k;
     uint16_t p = 0;
-    if (port != 0)
+    if (port != 0 || options_open())
         return 0;
     k = SDL_GetKeyboardState(NULL);
     if (k[SDL_SCANCODE_UP])     p |= PAD_UP;
@@ -177,6 +195,7 @@ int main(int argc, char **argv)
     }
     atexit(SDL_Quit);
 
+    options_load();
     gen_init(rom, size);
     gen_run();
     return 0;

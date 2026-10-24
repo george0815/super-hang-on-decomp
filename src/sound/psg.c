@@ -18,7 +18,17 @@ static struct {
     uint16_t lfsr;
     int16_t level[16];
     int ready;
+    float gain_target[4], gain_now[4];
 } psg;
+
+static void psg_init(void);
+
+void psg_set_gain(int ch, float gain)
+{
+    if (!psg.ready) psg_init();
+    if (ch >= 0 && ch < 4)
+        psg.gain_target[ch] = gain;
+}
 
 static void psg_init(void)
 {
@@ -29,6 +39,7 @@ static void psg_init(void)
     for (i = 0; i < 4; i++) {
         psg.vol[i] = 15;
         psg.out[i] = 1;
+        psg.gain_target[i] = psg.gain_now[i] = 1.0f;
     }
     psg.lfsr = 0x8000;
     psg.ready = 1;
@@ -81,11 +92,12 @@ void psg_render(int32_t *out, int samples)
                     psg.out[3] = (psg.lfsr & 1) ? 1 : -1;
                 }
             }
+            psg.gain_now[c] += (psg.gain_target[c] - psg.gain_now[c]) * 0.002f;
             /* periods 0/1 hold the output high (used for sample playback) */
             if (c < 3 && psg.period[c] <= 1)
-                mix += psg.level[psg.vol[c]];
+                mix += (int32_t)(psg.level[psg.vol[c]] * psg.gain_now[c]);
             else
-                mix += psg.out[c] * psg.level[psg.vol[c]];
+                mix += (int32_t)(psg.out[c] * psg.level[psg.vol[c]] * psg.gain_now[c]);
         }
         out[s] = mix;
     }

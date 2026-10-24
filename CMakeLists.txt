@@ -39,6 +39,7 @@ add_custom_command(
 
 add_executable(shangon
     src/port/main.c
+    src/port/options.c
     src/runtime/genesis.c
     src/runtime/vdp.c
     src/runtime/sound_host.c

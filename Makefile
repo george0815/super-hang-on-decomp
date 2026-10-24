@@ -53,8 +53,10 @@ build/replay: tests/replay.c $(RUNTIME) $(RTHDRS) build/recomp/sho_code.o
 SDL_CFLAGS ?= $(shell pkg-config --cflags sdl3)
 SDL_LIBS   ?= $(shell pkg-config --libs sdl3)
 
-build/shangon: src/port/main.c $(RUNTIME) $(RTHDRS) build/recomp/sho_code.o
-	$(CC) $(RCFLAGS) $(SDL_CFLAGS) -o $@ src/port/main.c $(RUNTIME) build/recomp/sho_code.o $(SDL_LIBS) -lm
+PORTSRC := src/port/main.c src/port/options.c
+
+build/shangon: $(PORTSRC) src/port/options.h $(RUNTIME) $(RTHDRS) build/recomp/sho_code.o
+	$(CC) $(RCFLAGS) $(SDL_CFLAGS) -o $@ $(PORTSRC) $(RUNTIME) build/recomp/sho_code.o $(SDL_LIBS) -lm
 
 port: build/shangon
 
