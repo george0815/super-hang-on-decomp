@@ -24,8 +24,13 @@ HOOKSRCS := $(GPGX)/core/m68k/m68kcpu.c $(GPGX)/core/vdp_ctrl.c $(GPGX)/core/deb
 HOOKOBJS := $(patsubst %.c,$(HOOKDIR)/%.o,$(notdir $(HOOKSRCS)))
 BASEOBJS := $(filter-out $(OBJDIR)/m68kcpu.o $(OBJDIR)/vdp_ctrl.o,$(OBJS))
 
-$(HOOKDIR)/%.o: $(GPGX)/core/m68k/%.c | $(HOOKDIR)
-	$(CC) $(CFLAGS) -DHOOK_CPU -fcommon -I$(GPGX)/core/debug -c $< -o $@
+# The core runs the instruction after an interrupt-enabling VDP write from
+# inside m68k_set_irq_delay(), bypassing the execute hook; a patched copy
+# adds the hook there so instruction counts stay exact.
+$(HOOKDIR)/m68kcpu.c: $(GPGX)/core/m68k/m68kcpu.c | $(HOOKDIR)
+	awk '!done && /REG_IR = m68ki_read_imm_16\(\);/ { print "      if (cpu_hook) cpu_hook(HOOK_M68K_E, 0, REG_PC, 0);"; done = 1 } { print }' $< > $@
+$(HOOKDIR)/m68kcpu.o: $(HOOKDIR)/m68kcpu.c
+	$(CC) $(CFLAGS) -DHOOK_CPU -fcommon -I$(GPGX)/core/m68k -I$(GPGX)/core/debug -c $< -o $@
 $(HOOKDIR)/%.o: $(GPGX)/core/%.c | $(HOOKDIR)
 	$(CC) $(CFLAGS) -DHOOK_CPU -fcommon -I$(GPGX)/core/debug -c $< -o $@
 $(HOOKDIR)/%.o: $(GPGX)/core/debug/%.c | $(HOOKDIR)

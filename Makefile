@@ -3,7 +3,7 @@ SHA1    := ecfd7b3bf4dcbee472ddf2f9cdbe968a05b814e0
 PYTHON  ?= python3
 VASM    ?= tools/bin/vasmm68k_mot
 
-.PHONY: all check disasm report rom recomp fntest clean
+.PHONY: all check disasm report rom recomp fntest replay port clean
 
 all: disasm
 
@@ -24,10 +24,12 @@ rom: disasm
 CC      ?= cc
 RCFLAGS := -O2 -std=c99 -Wall -Wno-unused-label -Wno-unused-variable -Isrc/runtime -Ibuild/recomp
 
-recomp: check | build
+recomp: build/recomp/sho_code.c
+
+build/recomp/sho_code.c: tools/recomp.py tools/shodis.py tools/m68k.py config/hints.txt | build
 	$(PYTHON) tools/recomp.py $(ROM) build/recomp
 
-build/recomp/sho_code.o: recomp src/runtime/m68k_rt.h
+build/recomp/sho_code.o: build/recomp/sho_code.c src/runtime/m68k_rt.h
 	$(CC) $(RCFLAGS) -c build/recomp/sho_code.c -o $@
 
 build/fntest: tests/fntest.c build/recomp/sho_code.o
@@ -37,6 +39,28 @@ build/fntest: tests/fntest.c build/recomp/sho_code.o
 SAMPLES ?= build/ref/race.samples
 fntest: build/fntest
 	build/fntest $(ROM) $(SAMPLES)
+
+RUNTIME := src/runtime/genesis.c src/runtime/vdp.c
+RTHDRS  := src/runtime/m68k_rt.h src/runtime/genesis.h src/runtime/vdp.h
+
+build/replay: tests/replay.c $(RUNTIME) $(RTHDRS) build/recomp/sho_code.o
+	$(CC) $(RCFLAGS) -o $@ tests/replay.c $(RUNTIME) build/recomp/sho_code.o -lz
+
+# native port (SDL3)
+SDL_CFLAGS ?= $(shell pkg-config --cflags sdl3)
+SDL_LIBS   ?= $(shell pkg-config --libs sdl3)
+
+build/shangon: src/port/main.c $(RUNTIME) $(RTHDRS) build/recomp/sho_code.o
+	$(CC) $(RCFLAGS) $(SDL_CFLAGS) -o $@ src/port/main.c $(RUNTIME) build/recomp/sho_code.o $(SDL_LIBS)
+
+port: build/shangon
+
+build/livetest: tests/livetest.c $(RUNTIME) $(RTHDRS) build/recomp/sho_code.o
+	$(CC) $(RCFLAGS) -o $@ tests/livetest.c $(RUNTIME) build/recomp/sho_code.o
+
+# whole-game replay against the reference recording
+replay: build/replay
+	build/replay $(ROM) build/ref/race.events build/ref/race.vtrace
 
 report: check
 	$(PYTHON) tools/shodis.py $(ROM) --report

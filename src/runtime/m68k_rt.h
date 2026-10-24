@@ -35,6 +35,24 @@ void m68k_dispatch(uint32_t addr);
 /* Fatal runtime error (unknown jump target, bad return, ...). */
 void m68k_fault(const char *what, uint32_t addr);
 
+/* ------------------------------------------------------------- timing */
+
+/* Every recompiled instruction starts with HOOK(pc, cycles). The host gets
+   control (m68k_event) before the instruction runs whenever the instruction
+   count or the cycle count reaches its next event; that is where interrupts
+   are taken. Live play uses the cycle count to pace video timing; replay
+   against a reference trace uses exact instruction counts. */
+extern uint64_t m68k_icount, m68k_icount_event;
+extern int64_t m68k_cycles, m68k_cycles_event;
+void m68k_event(uint32_t pc);
+
+#define HOOK(pc, cyc) do { \
+        if (m68k_icount == m68k_icount_event || m68k_cycles >= m68k_cycles_event) \
+            m68k_event(pc); \
+        m68k_icount++; \
+        m68k_cycles += (cyc); \
+    } while (0)
+
 /* ------------------------------------------------------------- memory */
 
 static inline uint8_t rd8(uint32_t a)

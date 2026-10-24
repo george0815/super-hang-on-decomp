@@ -48,6 +48,81 @@ class Unsupported(Exception):
     pass
 
 
+# Approximate MC68000 timing (clock cycles), used only to pace interrupts in
+# the native port; exact timing is not needed for correct game logic.
+EA_T = {DN: (0, 0), AN: (0, 0), IND: (4, 8), POSTINC: (4, 8), PREDEC: (6, 10),
+        DISP: (8, 12), INDEX: (10, 14), ABSW: (8, 12), ABSL: (12, 16),
+        PCDISP: (8, 12), PCINDEX: (10, 14), IMM: (4, 8)}
+
+
+def ea_t(o, sz):
+    t = EA_T.get(o.mode)
+    return 0 if t is None else t[sz == 4]
+
+
+def cycles(i):
+    m = i.mnem
+    sz = SZ.get(i.sz, 2) if i.flow not in ('bra', 'bsr', 'bcc') else 2
+    ops = i.ops
+    L = sz == 4
+    if m in ('move', 'movea'):
+        return 4 + sum(ea_t(o, sz) for o in ops)
+    if m == 'moveq':
+        return 4
+    if m in ('lea', 'pea'):
+        return (4 if m == 'lea' else 12) + ea_t(ops[0], 2)
+    if m in ('add', 'sub', 'and', 'or', 'eor', 'cmp', 'adda', 'suba', 'cmpa'):
+        if ops[-1].mode in (DN, AN):
+            return (8 if L else 4) + ea_t(ops[0], sz)
+        return (12 if L else 8) + ea_t(ops[1], sz)
+    if m in ('addi', 'subi', 'andi', 'ori', 'eori', 'cmpi'):
+        if ops[1].mode == DN:
+            return 16 if L else 8
+        return (20 if L else 12) + ea_t(ops[1], sz)
+    if m in ('addq', 'subq'):
+        if ops[1].mode in (DN, AN):
+            return 8 if L or ops[1].mode == AN else 4
+        return (12 if L else 8) + ea_t(ops[1], sz)
+    if m in ('clr', 'neg', 'negx', 'not', 'tst', 'scc', 'tas', 'nbcd') or (m[0] == 's' and i.cond is not None and not i.flow):
+        if ops[0].mode == DN:
+            return 6 if L else 4
+        return (12 if L else 8) + ea_t(ops[0], sz)
+    if m in ('mulu', 'muls'):
+        return 54 + ea_t(ops[0], 2)
+    if m == 'divu':
+        return 140 + ea_t(ops[0], 2)
+    if m == 'divs':
+        return 158 + ea_t(ops[0], 2)
+    if m in SHIFT:
+        if len(ops) == 1:
+            return 8 + ea_t(ops[0], 2)
+        n = ops[0].val if ops[0].mode == IMM else 4
+        return (8 if L else 6) + 2 * n
+    if m in ('btst', 'bset', 'bclr', 'bchg'):
+        return (4 if m == 'btst' else 8) + (4 if ops[0].mode == IMM else 0) + ea_t(ops[1], 1)
+    if m == 'movem':
+        regs = bin((ops[0] if ops[0].mode == REGLIST else ops[1]).val).count('1')
+        mem = ops[1] if ops[0].mode == REGLIST else ops[0]
+        return 8 + (8 if L else 4) * regs + ea_t(mem, 2)
+    if m in ('abcd', 'sbcd'):
+        return 6 if ops[0].mode == DN else 18
+    if i.flow in ('bra', 'bcc'):
+        return 10
+    if i.flow == 'dbcc':
+        return 10
+    if i.flow == 'bsr':
+        return 18
+    if i.flow in ('jsr', 'jmp'):
+        return (16 if i.flow == 'jsr' else 8) + ea_t(ops[0], 2)
+    if m in ('rts', 'rtr'):
+        return 16
+    if m == 'rte':
+        return 20
+    if m in ('exg', 'ext', 'swap', 'nop'):
+        return 6 if m == 'exg' else 4
+    return 8
+
+
 class FuncGen:
     """Generates C for one function body."""
 
@@ -378,6 +453,7 @@ class FuncGen:
         for k, a in enumerate(order):
             i = x.insns[a]
             out.append('L_%06X: /* %s */' % (a, m68k.fmt_insn(i).replace('*/', '* /')))
+            out.append('    HOOK(0x%06X, %d);' % (a, cycles(i)))
             try:
                 code = self.insn(i)
             except Unsupported as e:

@@ -8,6 +8,19 @@
  * function of its entry state and its logged hardware reads.
  *
  * usage: gpgx_fncap ROM FRAMES entries.txt OUT.samples [-i input.txt] [-k PER_FUNC]
+ *                   [-v OUT.vtrace] [-e OUT.events]
+ *
+ * -v also writes a VBlank trace (gzip): one record each time the VBlank
+ * handler ($6D2A) starts, i.e. after the exception frame is pushed:
+ *   u32 frame, u32 pad, u32 stacked_pc, u32 regs[18], u8 vdpreg[32],
+ *   u32 crc_vram, u16 cram[64] (9-bit packed BBBGGGRRR, as the core keeps it),
+ *   u16 vsram[64], u64 icount, u8 ram[65536]
+ *
+ * -e writes an event log (gzip) for exact replay: every interrupt and every
+ * hardware read, in order. icount = instructions executed before the event.
+ *   'V' u64 icount u32 stacked_pc     VBlank handler entered
+ *   'H' u64 icount u32 stacked_pc     HBlank handler entered
+ *   'R' u8 width u32 addr u32 value   hardware read
  *
  * Sample file: "SHOFNCAP" u32 version, then samples until EOF. Each sample
  * (big-endian): u32 entry, u32 ret, u32 frame, u32 nio,
@@ -20,6 +33,7 @@
 #include "md_ntsc.h"
 #include "sms_ntsc.h"
 #include "cpuhook.h"
+#include <zlib.h>
 
 int debug_on = 0;
 int log_error = 0;
@@ -100,6 +114,74 @@ static int depth;
 static uint32 prev_pc;
 static FILE *out;
 static long nsamples, ndiscard;
+static gzFile vtrace, events;
+static uint64_t icount;
+static FILE *pclog;
+static uint64_t pclog_limit;
+
+static void gzput(gzFile f, const void *p, int n) { gzwrite(f, p, n); }
+
+static void ev64(uint64_t v)
+{
+  uint8 b[8] = { v >> 56, v >> 48, v >> 40, v >> 32, v >> 24, v >> 16, v >> 8, v };
+  gzput(events, b, 8);
+}
+
+static void ev32(uint32 v)
+{
+  uint8 b[4] = { v >> 24, v >> 16, v >> 8, v };
+  gzput(events, b, 4);
+}
+
+static void get_regs(uint32 *r);
+static void get_ram(uint8 *dst);
+static uint32 ram32(uint32 a);
+
+static void gz32(uint32 v)
+{
+  uint8 b[4] = { v >> 24, v >> 16, v >> 8, v };
+  gzwrite(vtrace, b, 4);
+}
+
+static uint32 crc_mem(const uint8 *p, int len)
+{
+  /* memories are kept word-swapped on little-endian hosts; checksum the
+     big-endian view so the native port can compute the same value */
+  static uint8 tmp[0x10000];
+  int i;
+  for (i = 0; i < len; i++) tmp[i] = READ_BYTE(p, i);
+  return crc32(0, tmp, len);
+}
+
+static void vblank_record(void)
+{
+  static uint8 ram[0x10000];
+  uint32 regs[NUM_REGS];
+  int i;
+  get_regs(regs);
+  get_ram(ram);
+  gz32(cur_frame);
+  gz32(input.pad[0]);
+  gz32(ram32(regs[15] + 2));
+  for (i = 0; i < NUM_REGS; i++) gz32(regs[i]);
+  gzwrite(vtrace, reg, 32);
+  gz32(crc_mem(vram, 0x10000));
+  for (i = 0; i < 64; i++)
+  {
+    uint16 c = ((uint16 *)cram)[i];
+    uint8 b[2] = { c >> 8, c };
+    gzwrite(vtrace, b, 2);
+  }
+  for (i = 0; i < 64; i++)
+  {
+    uint16 v = ((uint16 *)vsram)[i];
+    uint8 b[2] = { v >> 8, v };
+    gzwrite(vtrace, b, 2);
+  }
+  gz32(icount >> 32);
+  gz32((uint32)icount);
+  gzwrite(vtrace, ram, 0x10000);
+}
 
 static void get_regs(uint32 *r)
 {
@@ -190,6 +272,18 @@ static void hook(hook_type_t type, int width, unsigned int addr, unsigned int va
     addr &= 0xffffff;
     if (addr < 0x400000 || addr >= 0xe00000) return;  /* ROM / RAM */
     log_io(type == HOOK_M68K_R ? 'R' : 'W', width, addr, value);
+    if (events && type == HOOK_M68K_R)
+    {
+      if (width == 4)
+      {
+        gzputc(events, 'R'); gzputc(events, 2); ev32(addr); ev32(value >> 16);
+        gzputc(events, 'R'); gzputc(events, 2); ev32(addr + 2); ev32(value & 0xffff);
+      }
+      else
+      {
+        gzputc(events, 'R'); gzputc(events, width); ev32(addr); ev32(value);
+      }
+    }
     return;
   }
   if (type != HOOK_M68K_E) return;
@@ -200,6 +294,17 @@ static void hook(hook_type_t type, int width, unsigned int addr, unsigned int va
   /* interrupt handlers: every call in progress saw outside interference */
   if (pc == 0x6d2a || pc == 0xff05d2)
     for (d = 0; d < depth; d++) stack[d].tainted = 1;
+  if (events && (pc == 0x6d2a || pc == 0xff05d2))
+  {
+    gzputc(events, pc == 0x6d2a ? 'V' : 'H');
+    ev64(icount);
+    ev32(ram32(sp + 2));
+  }
+  if (pc == 0x6d2a && vtrace)
+    vblank_record();
+  if (pclog && icount < pclog_limit)
+    fprintf(pclog, "%llu %06X\n", (unsigned long long)icount, pc);
+  icount++;
 
   /* returns: pop every call whose return point we just reached (calls
      abandoned by stack tricks are dropped when an outer one returns) */
@@ -268,6 +373,13 @@ int main(int argc, char **argv)
   {
     if (!strcmp(argv[i], "-i") && i + 1 < argc) load_script(argv[++i]);
     else if (!strcmp(argv[i], "-k") && i + 1 < argc) per_func = atoi(argv[++i]);
+    else if (!strcmp(argv[i], "-v") && i + 1 < argc) vtrace = gzopen(argv[++i], "wb1");
+    else if (!strcmp(argv[i], "-e") && i + 1 < argc) events = gzopen(argv[++i], "wb1");
+    else if (!strcmp(argv[i], "-p") && i + 2 < argc)  /* debug: log first N pcs */
+    {
+      pclog = fopen(argv[++i], "w");
+      pclog_limit = strtoull(argv[++i], NULL, 0);
+    }
   }
 
   error_init();
@@ -298,6 +410,8 @@ int main(int argc, char **argv)
     audio_update(snd);
   }
   fclose(out);
+  if (vtrace) gzclose(vtrace);
+  if (events) gzclose(events);
   {
     int funcs = 0;
     for (i = 0; i < 0x10000; i++) funcs += taken[i] > 0;

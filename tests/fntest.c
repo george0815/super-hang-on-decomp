@@ -23,6 +23,10 @@ M68kState cpu;
 uint8_t m68k_ram[0x10000];
 const uint8_t *m68k_rom;
 uint32_t m68k_rom_size;
+uint64_t m68k_icount, m68k_icount_event = UINT64_MAX;
+int64_t m68k_cycles, m68k_cycles_event = INT64_MAX;
+
+void m68k_event(uint32_t pc) { (void)pc; }
 
 typedef struct { uint8_t kind, width; uint32_t addr, value; } IoEntry;
 
