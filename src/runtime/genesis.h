@@ -33,6 +33,7 @@ extern const GenReplay *gen_replay;
 /* Interrupt entry, shared with the replay driver */
 void gen_take_irq(int level, uint32_t pc);
 void gen_render_line(void);   /* render vdp.line and advance */
+void gen_sound_frame(void);   /* Z80 VBlank interrupt + one frame of audio */
 
 extern uint8_t gen_frame[320 * 224];
 extern uint8_t z80_ram[0x2000];

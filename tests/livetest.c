@@ -3,6 +3,8 @@
  * live hardware model, scripted pad input), saving screenshots.
  *
  * usage: livetest ROM FRAMES INPUT.txt OUTDIR [FRAME]...
+ * Audio is written to OUTDIR/live.wav, the timed YM2612 register writes to
+ * OUTDIR/live.ymlog.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,11 +12,20 @@
 
 #include "genesis.h"
 #include "vdp.h"
+#include "sound.h"
 
 static int frame, frames, nshots, shots[64];
 static const char *outdir;
 static struct { int first, last; uint16_t pad; } script[1024];
 static int nscript;
+static FILE *wav, *ymlog;
+
+static void log_ym(int chip, int port, uint8_t v)
+{
+    if (chip == 0)
+        fprintf(ymlog, "%llu %d %02X\n", (unsigned long long)ym_samples, port, v);
+}
+static long wav_frames;
 
 static void load_script(const char *path)
 {
@@ -57,9 +68,35 @@ uint16_t host_pad(int port)
     return p;
 }
 
+static void wav_header(FILE *f, long frames)
+{
+    uint32_t data = (uint32_t)frames * 4, rate = YM_RATE;
+    uint8_t h[44] = { 'R','I','F','F', 0,0,0,0, 'W','A','V','E', 'f','m','t',' ',
+                      16,0,0,0, 1,0, 2,0, 0,0,0,0, 0,0,0,0, 4,0, 16,0, 'd','a','t','a', 0,0,0,0 };
+    uint32_t riff = data + 36, bps = rate * 4;
+    memcpy(h + 4, &riff, 4);
+    memcpy(h + 24, &rate, 4);
+    memcpy(h + 28, &bps, 4);
+    memcpy(h + 40, &data, 4);
+    fseek(f, 0, SEEK_SET);
+    fwrite(h, 1, 44, f);
+}
+
+static void close_wav(void)
+{
+    if (!wav) return;
+    wav_header(wav, wav_frames);
+    fclose(wav);
+}
+
 void host_frame(const uint8_t *pixels)
 {
     int i;
+    if (wav) {
+        fwrite(sound_buffer, 4, sound_buffered, wav);
+        wav_frames += sound_buffered;
+    }
+    sound_buffered = 0;
     for (i = 0; i < nshots; i++) {
         char path[512];
         FILE *f;
@@ -104,6 +141,15 @@ int main(int argc, char **argv)
     rom = malloc(len);
     if (fread(rom, 1, len, f) != (size_t)len) { perror(argv[1]); return 1; }
     fclose(f);
+    {
+        char path[512];
+        snprintf(path, sizeof path, "%s/live.wav", outdir);
+        wav = fopen(path, "wb");
+        if (wav) { wav_header(wav, 0); atexit(close_wav); }
+        snprintf(path, sizeof path, "%s/live.ymlog", outdir);
+        ymlog = fopen(path, "w");
+        if (ymlog) sound_write_hook = log_ym;
+    }
     gen_init(rom, (uint32_t)len);
     gen_run();
     return 0;

@@ -20,6 +20,7 @@
 #include "m68k_rt.h"
 #include "genesis.h"
 #include "vdp.h"
+#include "sound.h"
 
 typedef struct { uint8_t kind; uint64_t icount; uint32_t pc; } Irq;
 typedef struct { uint8_t width; uint32_t addr, value; } Read;
@@ -32,7 +33,17 @@ static gzFile vtrace;
 static long vcount, mismatches;
 static int resync;
 static int lines_rendered;
-static FILE *pclog;
+static FILE *pclog, *sndlog;
+int z80_trace;
+static gzFile zsnap;
+static long zcount;
+static int z80_trace_frame = -1;
+
+static void log_sound(int chip, int port, uint8_t v)
+{
+    if (chip == 0) fprintf(sndlog, "F %u %02X\n", port, v);
+    else fprintf(sndlog, "P %02X\n", v);
+}
 static uint64_t pclog_limit;
 static struct { int frame; const char *dir; } shots[64];
 static int nshots;
@@ -53,7 +64,7 @@ static void load_events(const char *path)
     for (;;) {
         int k = gzgetc(f);
         if (k < 0) break;
-        if (k == 'V' || k == 'H') {
+        if (k == 'V' || k == 'H' || k == 'Z' || k == 'T' || k == 'K') {
             gzread(f, b, 12);
             if (nirq == cap_i) irqs = realloc(irqs, (cap_i *= 2) * sizeof *irqs);
             irqs[nirq].kind = (uint8_t)k;
@@ -123,14 +134,47 @@ static int irq(uint32_t pc)
             fprintf(pclog, "%llu %06X\n", (unsigned long long)m68k_icount, pc);
         last = m68k_icount;
     }
-    if (irq_pos >= nirq)
-        finish();
-    if (irqs[irq_pos].icount != m68k_icount) {
+    for (;;) {
+        if (irq_pos >= nirq)
+            finish();
+        if (irqs[irq_pos].icount != m68k_icount) {
+            next_event();
+            return 0;
+        }
+        e = &irqs[irq_pos++];
         next_event();
-        return 0;
+        if (e->kind == 'T') {
+            sound_replay_timer();
+            continue;
+        }
+        if (e->kind == 'K') {
+            sound_replay_tick();
+            continue;
+        }
+        if (e->kind != 'Z')
+            break;
+        /* the Z80 took its VBlank interrupt; one frame of audio */
+        if (sndlog) fprintf(sndlog, "V %u\n", e->pc);   /* pc field holds the frame */
+        z80_trace = (int)e->pc == z80_trace_frame;
+        if (zsnap) {
+            static uint8_t ref[0x2000];
+            int k;
+            if (gzread(zsnap, ref, sizeof ref) == sizeof ref) {
+                for (k = 0; k < 0x1f00; k++)   /* stack area excluded */
+                    if (ref[k] != z80_ram[k]) {
+                        printf("Z80 RAM differs at Z80 interrupt %ld (frame %u): $%04X = %02X, reference %02X\n",
+                               zcount, e->pc, k, z80_ram[k], ref[k]);
+                        gzclose(zsnap);
+                        zsnap = NULL;
+                        break;
+                    }
+            }
+            zcount++;
+        }
+        sound_replay_irq();
+        sound_frame(889);
+        sound_buffered = 0;
     }
-    e = &irqs[irq_pos++];
-    next_event();
     if (e->pc != pc) {
         printf("interrupt #%zu at icount %llu: native pc %06X, reference %06X\n",
                irq_pos - 1, (unsigned long long)e->icount, pc, e->pc);
@@ -279,6 +323,14 @@ int main(int argc, char **argv)
     }
     for (i = 4; i < argc; i++) {
         if (!strcmp(argv[i], "--resync")) resync = 1;
+        else if (!strcmp(argv[i], "--zram") && i + 1 < argc)
+            zsnap = gzopen(argv[++i], "rb");
+        else if (!strcmp(argv[i], "--z80trace") && i + 1 < argc)  /* debug */
+            z80_trace_frame = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--sndlog") && i + 1 < argc) {
+            sndlog = fopen(argv[++i], "w");
+            sound_write_hook = log_sound;
+        }
         else if (!strcmp(argv[i], "--pclog") && i + 2 < argc) {  /* debug: log first N pcs */
             pclog = fopen(argv[++i], "w");
             pclog_limit = strtoull(argv[++i], NULL, 0);
@@ -297,6 +349,7 @@ int main(int argc, char **argv)
     signal(SIGINT, on_interrupt);
     gen_init(rom, (uint32_t)romlen);
     gen_replay = &replay_hooks;
+    sound_external_ticks = 1;
     m68k_cycles_event = INT64_MAX;
     next_event();
     if (pclog) m68k_icount_event = 0;

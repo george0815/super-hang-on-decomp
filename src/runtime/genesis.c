@@ -6,6 +6,7 @@
 #include "sho_funcs.h"
 #include "genesis.h"
 #include "vdp.h"
+#include "sound.h"
 
 M68kState cpu;
 uint8_t m68k_ram[0x10000];
@@ -103,6 +104,7 @@ static void io_write(int width, uint32_t a, uint32_t v)
         z80_busreq = ((width == 2 ? v >> 8 : v) & 1);
     } else if (a >= 0xa11200 && a < 0xa11202) {
         z80_reset = ((width == 2 ? v >> 8 : v) & 1);
+        sound_reset_line(z80_reset);
     } else if (a >= 0xa00000 && a < 0xa10000) {
         if ((a & 0x7fff) < 0x4000)             /* word writes store the high byte */
             z80_ram[a & 0x1fff] = (uint8_t)(width == 2 ? v >> 8 : v);
@@ -177,6 +179,18 @@ void gen_take_irq(int level, uint32_t pc)
     }
 }
 
+/* The Z80 gets its interrupt at VBlank; one frame of audio is produced here */
+void gen_sound_frame(void)
+{
+    static uint32_t frac;
+    /* YM_RATE / 59.9227 Hz = 888.93 samples per frame */
+    int n = 888;
+    frac += 93;
+    if (frac >= 100) { frac -= 100; n++; }
+    sound_vblank();
+    sound_frame(n);
+}
+
 void gen_render_line(void)
 {
     int l = vdp.line;
@@ -206,6 +220,7 @@ static void next_line(uint32_t pc)
     if (++vdp.line == 224) {
         vdp.in_vblank = 1;
         vdp.vint_pending = 1;
+        gen_sound_frame();
         host_frame(gen_frame);
     } else if (vdp.line == TOTAL_LINES) {
         vdp.line = 0;
@@ -241,6 +256,7 @@ void gen_init(const uint8_t *rom, uint32_t size)
     memset(&cpu, 0, sizeof cpu);
     memset(m68k_ram, 0, sizeof m68k_ram);
     vdp_reset();
+    ym_reset();
     cpu.a[7] = rd32(0);
     cpu.sr_hi = 0x27;
     m68k_cycles = 0;

@@ -8,7 +8,7 @@
  * function of its entry state and its logged hardware reads.
  *
  * usage: gpgx_fncap ROM FRAMES entries.txt OUT.samples [-i input.txt] [-k PER_FUNC]
- *                   [-v OUT.vtrace] [-e OUT.events]
+ *                   [-v OUT.vtrace] [-e OUT.events] [-s OUT.sndlog]
  *
  * -v also writes a VBlank trace (gzip): one record each time the VBlank
  * handler ($6D2A) starts, i.e. after the exception frame is pushed:
@@ -16,11 +16,22 @@
  *   u32 crc_vram, u16 cram[64] (9-bit packed BBBGGGRRR, as the core keeps it),
  *   u16 vsram[64], u64 icount, u8 ram[65536]
  *
+ * -s writes a sound log (text), one line per write:
+ *   F frame z80cycles port data    YM2612 (port 0-3)
+ *   P frame z80cycles data         PSG
+ *   M frame 68kcycles addr data    68000 write into Z80 space (mailbox)
+ *
  * -e writes an event log (gzip) for exact replay: every interrupt and every
  * hardware read, in order. icount = instructions executed before the event.
  *   'V' u64 icount u32 stacked_pc     VBlank handler entered
  *   'H' u64 icount u32 stacked_pc     HBlank handler entered
  *   'R' u8 width u32 addr u32 value   hardware read
+ *   'Z' u64 icount u32 frame          Z80 accepted its VBlank interrupt
+ * -z writes Z80 RAM (8 KB, gzip) each time the Z80 takes an interrupt.
+ *
+ *   'T' u64 icount u32 0              sound driver timer tick (Z80 rewrote
+ *                                     YM register $27 with $6F)
+ *   'K' u64 icount u32 frame          Z80 entered the driver tick ($0091)
  *
  * Sample file: "SHOFNCAP" u32 version, then samples until EOF. Each sample
  * (big-endian): u32 entry, u32 ret, u32 frame, u32 nio,
@@ -114,9 +125,64 @@ static int depth;
 static uint32 prev_pc;
 static FILE *out;
 static long nsamples, ndiscard;
-static gzFile vtrace, events;
+static gzFile vtrace;
+static FILE *pclog, *sndlog;
+static gzFile events;
 static uint64_t icount;
-static FILE *pclog;
+static void (*real_fm_write)(unsigned int cycles, unsigned int address, unsigned int data);
+
+static void ev64(uint64_t v);
+static void ev32(uint32 v);
+
+/* called by the patched Z80 core when it takes an interrupt */
+void (*z80_irq_hook)(void);
+static gzFile zsnap;
+static void on_z80_irq(void)
+{
+  if (events)
+  {
+    gzputc(events, 'Z');
+    ev64(icount);
+    ev32(cur_frame);
+  }
+  if (zsnap)  /* Z80 RAM as the interrupt is taken */
+    gzwrite(zsnap, zram, 0x2000);
+}
+
+void (*z80_pc_hook)(unsigned pc);
+static void on_z80_pc(unsigned pc)
+{
+  if (pc == 0x0091)   /* sound driver tick routine */
+  {
+    gzputc(events, 'K');
+    ev64(icount);
+    ev32(cur_frame);
+  }
+}
+
+static void log_fm_write(unsigned int cycles, unsigned int address, unsigned int data)
+{
+  static unsigned latch;
+  if (sndlog)
+    fprintf(sndlog, "F %d %u %u %02X\n", cur_frame, cycles, address & 3, data & 0xff);
+  if ((address & 3) == 0)
+    latch = data & 0xff;
+  else if ((address & 3) == 1 && latch == 0x27 && (data & 0xff) == 0x6f && events)
+  {
+    gzputc(events, 'T');
+    ev64(icount);
+    ev32(0);
+  }
+  real_fm_write(cycles, address, data);
+}
+
+void __real_psg_write(unsigned int cycles, unsigned int data);
+void __wrap_psg_write(unsigned int cycles, unsigned int data)
+{
+  if (sndlog)
+    fprintf(sndlog, "P %d %u %02X\n", cur_frame, cycles, data & 0xff);
+  __real_psg_write(cycles, data);
+}
 static uint64_t pclog_limit;
 
 static void gzput(gzFile f, const void *p, int n) { gzwrite(f, p, n); }
@@ -272,6 +338,9 @@ static void hook(hook_type_t type, int width, unsigned int addr, unsigned int va
     addr &= 0xffffff;
     if (addr < 0x400000 || addr >= 0xe00000) return;  /* ROM / RAM */
     log_io(type == HOOK_M68K_R ? 'R' : 'W', width, addr, value);
+    if (sndlog && type == HOOK_M68K_W && addr >= 0xa00000 && addr < 0xa10000)
+      fprintf(sndlog, "M %d %u %04X %02X\n", cur_frame, m68k.cycles, addr & 0xffff,
+              width == 2 ? (value >> 8) & 0xff : value & 0xff);
     if (events && type == HOOK_M68K_R)
     {
       if (width == 4)
@@ -375,6 +444,8 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[i], "-k") && i + 1 < argc) per_func = atoi(argv[++i]);
     else if (!strcmp(argv[i], "-v") && i + 1 < argc) vtrace = gzopen(argv[++i], "wb1");
     else if (!strcmp(argv[i], "-e") && i + 1 < argc) events = gzopen(argv[++i], "wb1");
+    else if (!strcmp(argv[i], "-s") && i + 1 < argc) sndlog = fopen(argv[++i], "w");
+    else if (!strcmp(argv[i], "-z") && i + 1 < argc) zsnap = gzopen(argv[++i], "wb1");
     else if (!strcmp(argv[i], "-p") && i + 2 < argc)  /* debug: log first N pcs */
     {
       pclog = fopen(argv[++i], "w");
@@ -402,6 +473,15 @@ int main(int argc, char **argv)
   fwrite("SHOFNCAP", 1, 8, out);
   put32(1);
 
+  if (events || zsnap)
+    z80_irq_hook = on_z80_irq;
+  if (events)
+    z80_pc_hook = on_z80_pc;
+  if (sndlog || events)
+  {
+    real_fm_write = fm_write;
+    fm_write = log_fm_write;
+  }
   set_cpu_hook(hook);
   for (cur_frame = 0; cur_frame < frames; cur_frame++)
   {
@@ -412,6 +492,7 @@ int main(int argc, char **argv)
   fclose(out);
   if (vtrace) gzclose(vtrace);
   if (events) gzclose(events);
+  if (zsnap) gzclose(zsnap);
   {
     int funcs = 0;
     for (i = 0; i < 0x10000; i++) funcs += taken[i] > 0;

@@ -22,7 +22,10 @@ Put it in the repo root. It is gitignored.
 - `src/runtime/m68k_rt.h`: CPU state, memory access, and flag semantics for the generated C
 - `src/runtime/genesis.c`: machine model: memory map, controller, Z80 mailbox, interrupts, video timing
 - `src/runtime/vdp.c`: VDP (video chip): ports, DMA, and a per-scanline renderer
+- `src/runtime/sound_host.c`: runs the recompiled Z80 sound driver (temporary)
+- `src/sound/ym2612.c`, `src/sound/psg.c`: native FM and PSG synthesizers
 - `src/port/main.c`: SDL3 frontend for the native port
+- `tools/z80.py`, `tools/z80dis.py`, `tools/z80recomp.py`: Z80 decoder, sound driver disassembler, and recompiler
 - `tools/trace/`: reference tools built on a local Genesis Plus GX checkout (not included):
   - `gpgx_trace`: headless run with scripted input; dumps registers and RAM every frame, plus screenshots
   - `gpgx_fncap`: records function entry/exit state and hardware access logs
@@ -40,19 +43,27 @@ Put it in the repo root. It is gitignored.
     make rom      # reassembles build/sho.s with vasm, compares with the ROM
     make recomp   # writes build/recomp/*.c
 
-Playing (sound is not implemented yet):
+Playing:
 
     make port
     build/shangon sho.md     # arrows, Z/X/C = A/B/C, Enter = Start, Esc = quit
+
+or with CMake (Linux, or Windows with SDL3 installed):
+
+    cmake -S . -B build/cmake -DSHO_ROM=path/to/sho.md
+    cmake --build build/cmake
 
 Differential testing needs Genesis Plus GX cloned into `genesis-plus-gx/`:
 
     make -C genesis-plus-gx/sdl -f Makefile.sdl2 -k   # core objects (frontend may fail; that's fine)
     make -C tools/trace all
     tools/trace/gpgx_fncap sho.md 3000 build/recomp/entries.txt build/ref/race.samples \
-        -i tests/inputs/race.txt -v build/ref/race.vtrace -e build/ref/race.events
+        -i tests/inputs/race.txt -v build/ref/race.vtrace -e build/ref/race.events \
+        -s build/ref/race.snd -z build/ref/race.zram
     make fntest    # per-function samples
     make replay    # whole game, compared at every VBlank
+    build/replay sho.md build/ref/race.events build/ref/race.vtrace --zram build/ref/race.zram
+                   # also compares sound driver RAM at every Z80 interrupt
 
 ## ROM map (so far)
 

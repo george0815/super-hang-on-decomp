@@ -9,6 +9,7 @@
  *
  * input.txt lines:  FIRST LAST BUTTONS   (frames inclusive; buttons from
  *                   "UDLRABCS", e.g. "200 210 S" holds Start)
+ * -w FILE.wav       also record the audio output
  * -s FRAME          also write DIR/frame_NNNNN.ppm and DIR/frame_NNNNN.vdp
  *                   (VRAM, CRAM, VSRAM, registers) for that frame
  *
@@ -126,7 +127,8 @@ int main(int argc, char **argv)
   static int shots[256];
   int nshots = 0, frames, i, r;
   const char *dir = ".";
-  FILE *out;
+  FILE *out, *wav = NULL;
+  long wav_frames = 0;
 
   if (argc < 4)
   {
@@ -139,6 +141,7 @@ int main(int argc, char **argv)
     if (!strcmp(argv[i], "-i") && i + 1 < argc) load_script(argv[++i]);
     else if (!strcmp(argv[i], "-s") && i + 1 < argc && nshots < 256) shots[nshots++] = atoi(argv[++i]);
     else if (!strcmp(argv[i], "-d") && i + 1 < argc) dir = argv[++i];
+    else if (!strcmp(argv[i], "-w") && i + 1 < argc) { wav = fopen(argv[++i], "wb"); if (wav) fseek(wav, 44, SEEK_SET); }
   }
 
   error_init();
@@ -171,8 +174,10 @@ int main(int argc, char **argv)
   for (cur_frame = 0; cur_frame < frames; cur_frame++)
   {
     int16 snd[4096 * 2];
+    int n;
     system_frame_gen(0);
-    audio_update(snd);
+    n = audio_update(snd);
+    if (wav) { fwrite(snd, 4, n, wav); wav_frames += n; }
 
     put32(out, cur_frame);
     for (r = M68K_REG_D0; r <= M68K_REG_A7; r++)
@@ -187,5 +192,15 @@ int main(int argc, char **argv)
         write_shot(dir, cur_frame);
   }
   fclose(out);
+  if (wav)
+  {
+    uint32 data = wav_frames * 4, riff = data + 36, rate = 44100, bps = rate * 4;
+    uint8 h[44] = { 'R','I','F','F', 0,0,0,0, 'W','A','V','E', 'f','m','t',' ',
+                    16,0,0,0, 1,0, 2,0, 0,0,0,0, 0,0,0,0, 4,0, 16,0, 'd','a','t','a', 0,0,0,0 };
+    memcpy(h + 4, &riff, 4); memcpy(h + 24, &rate, 4); memcpy(h + 28, &bps, 4); memcpy(h + 40, &data, 4);
+    fseek(wav, 0, SEEK_SET);
+    fwrite(h, 1, 44, wav);
+    fclose(wav);
+  }
   return 0;
 }

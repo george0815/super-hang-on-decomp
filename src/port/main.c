@@ -1,8 +1,8 @@
 /*
  * Native Super Hang-On: SDL3 frontend.
  *
- * The game code runs recompiled; this file only provides a window, input and
- * frame pacing. Sound is not implemented yet.
+ * The game code runs recompiled; this file only provides a window, input,
+ * audio output and frame pacing.
  *
  * usage: shangon [ROM]   (default: sho.md)
  *
@@ -16,6 +16,7 @@
 
 #include "genesis.h"
 #include "vdp.h"
+#include "sound.h"
 
 #define FRAME_NS 16683350ull  /* NTSC: 59.94 Hz */
 
@@ -23,6 +24,7 @@ static SDL_Window *window;
 static SDL_Renderer *renderer;
 static SDL_Texture *texture;
 static SDL_Gamepad *gamepad;
+static SDL_AudioStream *audio;
 static uint64_t next_frame;
 
 static void poll_events(void)
@@ -58,6 +60,12 @@ void host_frame(const uint8_t *pixels)
     uint64_t now;
 
     poll_events();
+    if (audio) {
+        /* keep latency bounded if video and audio clocks drift apart */
+        if (SDL_GetAudioStreamQueued(audio) < YM_RATE / 4 * 4)
+            SDL_PutAudioStreamData(audio, sound_buffer, sound_buffered * 4);
+    }
+    sound_buffered = 0;
     for (i = 0; i < 64; i++)
         palette[i] = vdp_color(i);
     if (SDL_LockTexture(texture, NULL, &dst, &pitch)) {
@@ -144,7 +152,7 @@ int main(int argc, char **argv)
     uint32_t size;
     uint8_t *rom = load_rom(argc > 1 ? argv[1] : "sho.md", &size);
 
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO)) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;
     }
@@ -159,6 +167,14 @@ int main(int argc, char **argv)
     texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_XRGB8888,
                                 SDL_TEXTUREACCESS_STREAMING, VDP_WIDTH, VDP_LINES);
     SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
+    {
+        SDL_AudioSpec spec = { SDL_AUDIO_S16, 2, YM_RATE };
+        audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
+        if (audio)
+            SDL_ResumeAudioStreamDevice(audio);
+        else
+            fprintf(stderr, "no audio: %s\n", SDL_GetError());
+    }
     atexit(SDL_Quit);
 
     gen_init(rom, size);
