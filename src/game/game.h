@@ -54,6 +54,11 @@ uint16_t rng_next(void);
 /* ------------------------------------------------------------ audio.c */
 void sound_command(uint8_t command);
 
+/* ----------------------------------------------------------- vblank.c */
+void vblank_menu(void);
+void vblank_race(void);
+uint16_t char_tile(uint8_t c);
+
 /* ---------------------------------------------------------- objects.c */
 void obj_add_to_layer(uint32_t obj);
 
