@@ -8,3 +8,5 @@
 0084C2  rng_next_68k
 006E8C  sound_command_68k
 00709A  obj_add_to_layer_68k
+00855E  nemesis_to_vdp_68k
+008570  nemesis_to_ram_68k

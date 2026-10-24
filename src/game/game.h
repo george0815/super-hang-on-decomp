@@ -44,6 +44,10 @@ void vdp_fill(uint32_t command, uint16_t value, int count);
 void vdp_copy(uint32_t command, uint32_t src, int count);
 void vdp_copy_rect(uint32_t command, uint32_t src, int width, int height);
 
+/* ---------------------------------------------------------- nemesis.c */
+void nemesis_to_vdp(uint32_t src);
+void nemesis_to_ram(uint32_t src, uint32_t dst);
+
 /* ----------------------------------------------------------- system.c */
 uint16_t rng_next(void);
 
