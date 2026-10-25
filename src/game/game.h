@@ -14,6 +14,14 @@
 
 #include "m68k_rt.h"
 
+/* Call a recompiled function that has no C version yet (it returns with
+   rts, popping the dummy return address). */
+static inline void call68k(void (*fn)(void))
+{
+    push32(0);
+    fn();
+}
+
 /* ------------------------------------------------------- work RAM map */
 
 #define VDP_MODE_SHADOW   0xFFC700  /* copies of the VDP mode register commands
@@ -81,6 +89,7 @@ void race_speed(void);
 void race_drift(void);
 void race_build_road(void);
 void race_stage(void);
+void hud_map_marker(void);
 void time_tiles(uint32_t time, uint32_t dst);
 
 /* ---------------------------------------------------------- objects.c */

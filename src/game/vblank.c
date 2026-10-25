@@ -53,12 +53,6 @@
 #define PAD1_PORT         0xA10003
 #define PAD2_PORT         0xA10005
 
-/* Call a recompiled function (it returns with rts). */
-static void call68k(void (*fn)(void))
-{
-    push32(0);
-    fn();
-}
 
 /* ---------------------------------------------------- bus and DMA */
 
@@ -738,7 +732,7 @@ void vblank_race(void)                 /* $E906 */
         hud_part_4();
         hud_part_5();
         hud_time();
-        call68k(f_00BB76);
+        hud_map_marker();
         call68k(f_00BD0C);
         hud_tasks();
         break;

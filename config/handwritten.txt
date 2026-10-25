@@ -84,3 +84,11 @@
 0075DA  title_launch_68k
 008210  screen_reset_68k
 00833E  plane_a_fill_68k
+007DCC  music_select_input_68k
+007F00  music_names_68k
+007E42  music_blink_0_68k
+007E46  music_blink_1_68k
+007E4A  music_blink_2_68k
+007E4E  music_blink_3_68k
+007E2E  music_draw_68k
+007F2E  music_graphics_68k

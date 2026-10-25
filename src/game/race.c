@@ -2178,7 +2178,7 @@ void scroll_tables_68k(void)
 
 /* Move the bike marker along the HUD course map ($BB76): two tiles of
    the marker strip chosen by the progress at $FF0530. */
-static void hud_map_marker(void)
+void hud_map_marker(void)
 {
     uint16_t progress = rd16(0xFF0530);
     if (rd16(SOUND_LOCKED))
