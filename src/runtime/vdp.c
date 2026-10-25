@@ -4,6 +4,8 @@
 #include "vdp.h"
 
 Vdp vdp;
+int vdp_trace;   /* debug: log DMA operations to stderr */
+#include <stdio.h>
 
 void vdp_reset(void)
 {
@@ -52,6 +54,7 @@ static void dma_68k(void)
 {
     uint32_t len = dma_length();
     uint32_t src = (vdp.reg[21] << 1 | vdp.reg[22] << 9 | (vdp.reg[23] & 0x7f) << 17);
+    if (vdp_trace) fprintf(stderr, "dma68k code %02X addr %04X len %X inc %d src %06X\n", vdp.code, vdp.addr, len, vdp.reg[15], src);
     while (len--) {
         write_target(rd16(src));
         /* the source address wraps within a 128 KB window */
@@ -63,9 +66,11 @@ static void dma_68k(void)
 static void dma_fill(uint16_t data)
 {
     uint32_t len = dma_length();
-    /* the data word itself is written first, then the high byte is
-       repeated through VRAM */
+    if (vdp_trace) fprintf(stderr, "fill code %02X addr %04X len %X inc %d data %04X\n", vdp.code, vdp.addr, len, vdp.reg[15], data);
+    /* the data word is written first (a normal write, so the address
+       advances), then its high byte is repeated through VRAM */
     vram_write_word(vdp.addr, data);
+    vdp.addr += vdp.reg[15];
     do {
         vdp.vram[vdp.addr ^ 1] = (uint8_t)(data >> 8);
         vdp.addr += vdp.reg[15];
@@ -77,6 +82,7 @@ static void dma_copy(void)
 {
     uint32_t len = dma_length();
     uint16_t src = (uint16_t)(vdp.reg[21] | vdp.reg[22] << 8);
+    if (vdp_trace) fprintf(stderr, "copy addr %04X len %X inc %d src %04X\n", vdp.addr, len, vdp.reg[15], src);
     do {
         vdp.vram[vdp.addr ^ 1] = vdp.vram[src ^ 1];
         src++;

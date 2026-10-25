@@ -72,9 +72,14 @@ build/livetest: tests/livetest.c $(RUNTIME) $(RTHDRS) build/recomp/sho_code.o
 replay: build/replay
 	build/replay $(ROM) build/ref/race.events build/ref/race.vtrace
 
-# replay with every handwritten function checked against its original
+# replay every recorded session (tools/record.sh) with each handwritten
+# function checked against its original
+RECORDINGS ?= $(patsubst build/ref/%.events,%,$(wildcard build/ref/*.events))
 verify: build/replay
-	build/replay $(ROM) build/ref/race.events build/ref/race.vtrace --verify
+	@for r in $(RECORDINGS); do \
+	    echo "== $$r"; \
+	    build/replay $(ROM) build/ref/$$r.events build/ref/$$r.vtrace --verify || exit 1; \
+	done
 
 report: check
 	$(PYTHON) tools/shodis.py $(ROM) --report

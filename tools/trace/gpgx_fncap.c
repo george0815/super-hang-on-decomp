@@ -219,6 +219,8 @@ static uint32 crc_mem(const uint8 *p, int len)
   return crc32(0, tmp, len);
 }
 
+static long vblank_index, vram_dump_at = -1;
+
 static void vblank_record(void)
 {
   static uint8 ram[0x10000];
@@ -247,6 +249,14 @@ static void vblank_record(void)
   gz32(icount >> 32);
   gz32((uint32)icount);
   gzwrite(vtrace, ram, 0x10000);
+  if (vblank_index++ == vram_dump_at)   /* debug: VRAM at one VBlank */
+  {
+    FILE *f = fopen("vram_ref.bin", "wb");
+    static uint8 v[0x10000];
+    for (i = 0; i < 0x10000; i++) v[i] = READ_BYTE(vram, i);
+    fwrite(v, 1, sizeof v, f);
+    fclose(f);
+  }
 }
 
 static void get_regs(uint32 *r)
@@ -446,6 +456,7 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[i], "-e") && i + 1 < argc) events = gzopen(argv[++i], "wb1");
     else if (!strcmp(argv[i], "-s") && i + 1 < argc) sndlog = fopen(argv[++i], "w");
     else if (!strcmp(argv[i], "-z") && i + 1 < argc) zsnap = gzopen(argv[++i], "wb1");
+    else if (!strcmp(argv[i], "-D") && i + 1 < argc) vram_dump_at = atol(argv[++i]);  /* debug */
     else if (!strcmp(argv[i], "-p") && i + 2 < argc)  /* debug: log first N pcs */
     {
       pclog = fopen(argv[++i], "w");

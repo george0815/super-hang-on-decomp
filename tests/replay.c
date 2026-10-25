@@ -243,6 +243,7 @@ static void vblank(void)
     vsram = cram + 128;
     ram = vsram + 128 + 8;
     vcount++;
+    { extern int vdp_trace; vdp_trace = getenv("VDP_TRACE_AT") && vcount == atol(getenv("VDP_TRACE_AT")); }
 
     for (i = 0; i < 8; i++) got[i] = cpu.d[i];
     for (i = 0; i < 8; i++) got[8 + i] = cpu.a[i];
@@ -277,6 +278,8 @@ static void vblank(void)
         snprintf(diff, sizeof diff, "VRAM crc %08X, reference %08X", crc, be32(vreg + 32));
 
     if (diff[0]) {
+        FILE *vf = fopen("vram_native.bin", "wb");   /* debug aid */
+        if (vf) { fwrite(vdp.vram, 1, sizeof vdp.vram, vf); fclose(vf); }
         mismatches++;
         printf("frame %d (VBlank %ld): %s\n", frame, vcount - 1, diff);
         if (!resync) finish();

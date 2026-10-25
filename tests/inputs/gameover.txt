@@ -1,0 +1,17 @@
+# Start a race, ride briefly, then let the time run out: game over, name entry
+420 425 S
+520 525 S
+620 625 S
+720 725 S
+820 825 S
+920 925 S
+1020 1025 S
+1100 1400 B
+5200 5205 S
+5400 5405 R
+5450 5455 A
+5500 5505 R
+5550 5555 A
+5600 5605 S
+5800 5805 S
+6000 6005 S
