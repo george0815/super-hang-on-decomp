@@ -102,3 +102,5 @@
 008D7C  rival_splits_68k
 00C1F6  hud_eight_tiles_68k
 0052CC  mechanic_menu_68k
+0052D4  end_menu_68k
+0052C8  parts_menu_68k

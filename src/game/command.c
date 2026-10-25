@@ -175,3 +175,118 @@ void mechanic_menu_68k(void)
     if (command_unmasked)
         set_sr(get_sr() & 0xF8FF);
 }
+
+/* --------------------------------------------------------------- end */
+
+#include "sho_funcs.h"
+
+#define PASSWORD         0xFFB658   /* 28 character codes */
+
+/* A row of 14 password characters, each followed by a blank ($5872). */
+static void password_row(uint32_t cmd, uint32_t codes)
+{
+    int k;
+    wr32(VDP_CTRL, cmd);
+    for (k = 0; k < 14; k++) {
+        uint8_t c = rd8(codes + k);
+        wr16(VDP_DATA, (uint16_t)(c + 0x614 + rd16(0x005224 + 2 * c)));
+        wr16(VDP_DATA, 0);
+    }
+    command_unmasked = 1;
+}
+
+/* Two check bytes over the 24 codes: XOR of the even and odd codes,
+   rotated together as a 16-bit pair with feedback ($51DC). */
+static void password_check(uint8_t *hi, uint8_t *lo)
+{
+    uint8_t d1 = 0, d2 = 0;
+    int k;
+    for (k = 0; k < 12; k++) {
+        int x, c;
+        d2 ^= rd8(PASSWORD + 2 * k);
+        d1 ^= rd8(PASSWORD + 2 * k + 1);
+        x = d1 & 1;
+        d1 >>= 1;
+        c = d2 & 1;
+        d2 = (uint8_t)(x << 7 | d2 >> 1);
+        if (c) {
+            d1 ^= 0x88;
+            d2 ^= 0x10;
+        }
+    }
+    *hi = d1;
+    *lo = d2;
+}
+
+/*
+ * The password ($57D0): 16 game state bytes (codes from $B0 up count as
+ * $23), four more split into nibbles with position offsets, and the
+ * check bytes as four more codes; drawn in two rows.
+ */
+static void password_show(void)
+{
+    uint32_t ptr = 0x0050E6, out = PASSWORD;
+    uint8_t hi, lo;
+    int k;
+    for (k = 0; k < 16; k++, ptr += 4) {
+        uint8_t c = rd8(rd32(ptr));
+        wr8(out++, c >= 0xB0 ? 0x23 : c);
+    }
+    for (k = 3; k >= 0; k--, ptr += 4) {
+        uint8_t c = rd8(rd32(ptr));
+        wr8(out++, (uint8_t)((c >> 4) + 6 + 3 * k));
+        wr8(out++, (uint8_t)((c & 0xF) + 10 + 3 * k));
+    }
+    password_check(&hi, &lo);
+    wr8(PASSWORD + 0x18, (uint8_t)((hi >> 4) + 0x0B));
+    wr8(PASSWORD + 0x19, (uint8_t)((hi & 0xF) + 0x0D));
+    wr8(PASSWORD + 0x1A, (uint8_t)((lo >> 4) + 0x0F));
+    wr8(PASSWORD + 0x1B, (uint8_t)((lo & 0xF) + 0x11));
+    password_row(0x5B940003, PASSWORD);
+    password_row(0x5C140003, PASSWORD + 0x0E);
+}
+
+/* Open the end submenu: the sponsor's message ($5A68). */
+static void end_open(void)
+{
+    rect(0x5B120003, 0x015566, 30, 4);
+    vdp_copy(0x5A020003, 0x0142CC, 7);
+    rect_record(rd32(mechanic_text_table(0x0124A0, 0x01325C) + 4 * rd16(0xFFB610) +
+                     32 * rd16(0xFFB612)));
+}
+
+/* The end submenu, one frame ($5A38): shows the password; C/Start fades
+   out and restarts the game. */
+static void end_menu(void)
+{
+    command_unmasked = 0;
+    if (!(rd8(SUBMENU + 1) & 1)) {
+        wr8(SUBMENU + 1, rd8(SUBMENU + 1) | 1);
+        end_open();
+        return;
+    }
+    if (rd8(PAD1_PRESSED) & 0xA0) {
+        call68k(f_006DD4);           /* fade out (waits for VBlanks) */
+        wr16(0xFFC722, 0);
+        wr16(0xFFC704, 0);
+        return;
+    }
+    vdp_copy(0x5B120003, 0x00613E, 8);
+    password_show();
+}
+
+void end_menu_68k(void)
+{
+    end_menu();
+    if (command_unmasked)
+        set_sr(get_sr() & 0xF8FF);
+}
+
+/* Original mode's parts screen is its own game mode ($53C2). */
+static void parts_menu(void)
+{
+    wr16(0xFFC722, 0);
+    wr16(0xFFC704, 0x28);
+}
+
+void parts_menu_68k(void) { parts_menu(); }
