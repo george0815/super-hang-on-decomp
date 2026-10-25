@@ -157,3 +157,7 @@
 006D5E  wait_frame_ticks_68k
 008ACC  race_frame_68k
 008976  demo_frame_68k
+00DC0C  ranking_tables_init_68k
+00E6A4  records_init_68k
+00817A  pads_init_68k
+006BAC  reset_68k noverify

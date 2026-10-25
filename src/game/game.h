@@ -73,6 +73,11 @@ uint8_t bcd_addx(uint8_t a, uint8_t b, int *x);
 uint8_t bcd_subx(uint8_t a, uint8_t b, int *x);
 void wait_vblank(void);
 void wait_frame_ticks(void);
+void ranking_tables_init(void);
+void records_init(void);
+void pads_init(void);
+void sound_driver_load(void);
+void hblank_install(void);
 
 /* ------------------------------------------------------------ audio.c */
 void sound_command(uint8_t command);

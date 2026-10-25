@@ -252,3 +252,14 @@ static void ranking_frame(void)
 }
 
 void ranking_frame_68k(void) { ranking_frame(); }
+
+/* The four courses' default ranking tables at $FF0200 ($DC0C). */
+void ranking_tables_init(void)
+{
+    static const uint32_t defaults[4] = { 0x00DC58, 0x00DC90, 0x00DCC8, 0x00DD00 };
+    int k;
+    for (k = 0; k < 4; k++)
+        ranking_defaults(0xFF0200 + 0x70 * k, defaults[k]);
+}
+
+void ranking_tables_init_68k(void) { ranking_tables_init(); }

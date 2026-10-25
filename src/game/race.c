@@ -2573,3 +2573,15 @@ static void demo_frame(void)
 }
 
 void demo_frame_68k(void) { demo_frame(); }
+
+/* Best segment times and course totals as "none yet" ($E6A4). */
+void records_init(void)
+{
+    int k;
+    for (k = 0; k < 0x3A; k++)
+        wr16(0xFF0478 + 2 * k, 0x9999);
+    for (k = 0; k < 4; k++)
+        wr32(BEST_TOTALS + 4 * k, 0x595999);
+}
+
+void records_init_68k(void) { records_init(); set_dn(1, 2, 0xFFFF); }

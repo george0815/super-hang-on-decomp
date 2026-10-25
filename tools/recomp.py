@@ -477,10 +477,14 @@ class FuncGen:
         return '\n'.join(out)
 
 
+NOVERIFY = set()
+
+
 def load_handwritten(path, with_ignore=False):
-    """config/handwritten.txt: ADDR c_function_name [ignore=part,part...]
+    """config/handwritten.txt: ADDR c_function_name [ignore=part,part...] [noverify]
     ignore lists outputs left out of verification (each needs a reason in a
-    comment): e.g. d4.hi, d1.b1, x"""
+    comment): e.g. d4.hi, d1.b1, x. noverify: verify builds always run the
+    original (for code that never returns, like the main loop)"""
     out, ignore = {}, {}
     if os.path.exists(path):
         for ln in open(path):
@@ -491,6 +495,8 @@ def load_handwritten(path, with_ignore=False):
                 for extra in f[2:]:
                     if extra.startswith('ignore='):
                         ignore[int(f[0], 16)] = parse_parts(extra[7:])
+                    elif extra == 'noverify':
+                        NOVERIFY.add(int(f[0], 16))
     return (out, ignore) if with_ignore else out
 
 
@@ -582,8 +588,11 @@ class Recompiler:
                     c.write('static void h_%06X(void) { %s(); cpu.ret = pop32(); }\n' % (f, name))
                     c.write('#ifdef SHO_VERIFY\n')
                     c.write(FuncGen(self, f).generate('o_%06X' % f, 'static '))
-                    c.write('\nvoid %s(void) { verify_call(0x%06X, "%s", o_%06X, h_%06X, 0x%XULL); }\n' % (
-                        self.fname(f), f, name, f, f, flow.local[f] & ~ignore.get(f, 0)))
+                    if f in NOVERIFY:
+                        c.write('\nvoid %s(void) { (void)h_%06X; o_%06X(); }\n' % (self.fname(f), f, f))
+                    else:
+                        c.write('\nvoid %s(void) { verify_call(0x%06X, "%s", o_%06X, h_%06X, 0x%XULL); }\n' % (
+                            self.fname(f), f, name, f, f, flow.local[f] & ~ignore.get(f, 0)))
                     c.write('#else\nvoid %s(void) { h_%06X(); }\n#endif\n\n' % (self.fname(f), f))
                     continue
                 c.write(FuncGen(self, f).generate())

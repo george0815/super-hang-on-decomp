@@ -131,3 +131,99 @@ void wait_frame_ticks(void)
 }
 
 void wait_frame_ticks_68k(void) { wait_frame_ticks(); }
+
+/* --------------------------------------------------------------- reset */
+
+#include "sho_funcs.h"
+
+#define RAM_SIGNATURE    0xFF0000   /* "init" once RAM has been set up */
+
+/* Keep the password codes, region flags and option settings over a RAM
+   clear from $FF0500 up. */
+static void ram_clear_keep(void)
+{
+    uint16_t lang = rd16(0xFFC89C);
+    uint32_t region = rd32(0xFFC890), options = rd32(0xFF053A);
+    int k;
+    for (k = 0; k < 28; k += 4)
+        wr32(0xFF0008 + k, rd32(0xFFB658 + k));
+    for (k = 0; k < 0xFB00; k += 4)
+        wr32(0xFF0500 + k, 0);
+    for (k = 0; k < 28; k += 4)
+        wr32(0xFFB658 + k, rd32(0xFF0008 + k));
+    wr16(0xFFC89C, lang);
+    wr32(0xFFC890, region);
+    wr32(0xFF053A, options);
+}
+
+/* ROM checksum from $200 to the end, against the header ($6BF4). */
+static int rom_checksum_ok(void)
+{
+    uint32_t a, end = rd32(0x0001A4) + 1;
+    uint16_t sum = 0;
+    for (a = 0x200; a < end; a += 2)
+        sum = (uint16_t)(sum + rd16(a));
+    return sum == rd16(0x00018E);
+}
+
+/*
+ * Power on and reset ($6BAC): TMSS, region flags; on a cold start the ROM
+ * checksum (a red screen if it fails), all RAM cleared and the ranking
+ * and record tables set up; on a reset a fade out. Then the sound
+ * driver, VDP, pads and HBlank routine, and the main loop: one game mode
+ * frame after another.
+ */
+void reset(void)
+{
+    uint8_t version = rd8(0xA10001);
+    int k;
+    if (version & 0x0F)
+        wr32(0xA14000, 0x53454741);       /* "SEGA" for the TMSS */
+    wr16(0xFFC890, version & 0x80);
+    wr16(0xFFC89C, version & 0x80);
+    wr16(0xFFC892, version & 0x40);
+    if ((rd8(0xA1000D) & 0x40) && rd32(RAM_SIGNATURE) == 0x696E6974) {
+        if ((int16_t)rd16(0xFFC722) > 8)
+            wr16(0xFFC722, 0);
+        set_sr(get_sr() & 0xF8FF);
+        call68k(f_006DD4);                /* fade out */
+        set_sr(get_sr() | 0x700);
+    } else {
+        uint16_t lang;
+        uint32_t region;
+        if (!rom_checksum_ok()) {
+            vdp_init_registers();
+            wr32(VDP_CTRL, 0xC0000000);
+            for (k = 0; k < 64; k++)
+                wr16(VDP_DATA, 0x000E);
+            for (;;)
+                m68k_idle(0x006D8C);
+        }
+        lang = rd16(0xFFC89C);
+        region = rd32(0xFFC890);
+        for (k = 0; k < 0x10000; k += 4)
+            wr32(0xFF0000 + k, 0);
+        wr16(0xFFC89C, lang);
+        wr32(0xFFC890, region);
+        vdp_init_registers();
+        ranking_tables_init();
+        records_init();
+        wr32(RAM_SIGNATURE, 0x696E6974);
+    }
+    ram_clear_keep();
+    sound_driver_load();
+    vdp_init_registers();
+    pads_init();
+    hblank_install();
+    set_sr(get_sr() & 0xF8FF);
+    for (;;) {
+        uint16_t mode;
+        wr8(0xFFC726, rd8(0xFFC726) + 1);
+        mode = rd16(0xFFC704) & 0x7FFC;
+        set_dn(0, 2, mode);
+        push32(0x006CF0);
+        m68k_dispatch(0x006CF2 + mode);
+    }
+}
+
+void reset_68k(void) { reset(); }

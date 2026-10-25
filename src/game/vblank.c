@@ -916,6 +916,18 @@ static void read_pad(uint32_t state, uint32_t port)      /* $81BA */
     wr8(state + 1, now & changed);   /* newly pressed */
 }
 
+/* Pad ports as inputs with TH as output ($817A). */
+void pads_init(void)
+{
+    z80_bus_request();
+    wr8(0xA10009, 0x40);
+    wr8(0xA1000B, 0x40);
+    wr8(0xA1000D, 0x40);
+    z80_bus_release();
+}
+
+void pads_init_68k(void) { pads_init(); f_logic(2, 0); }
+
 static void read_pads(void)            /* $8196 */
 {
     z80_bus_request();
