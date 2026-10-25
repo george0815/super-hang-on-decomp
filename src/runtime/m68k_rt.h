@@ -45,6 +45,7 @@ void m68k_fault(const char *what, uint32_t addr);
 extern uint64_t m68k_icount, m68k_icount_event;
 extern int64_t m68k_cycles, m68k_cycles_event;
 void m68k_event(uint32_t pc);
+void m68k_idle(uint32_t pc);   /* let time pass to the next event */
 
 #ifdef SHO_PROFILE
 /* instructions executed per word address of the code area (livetest -p) */

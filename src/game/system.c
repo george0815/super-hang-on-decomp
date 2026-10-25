@@ -100,3 +100,34 @@ void hblank_install_68k(void)
     set_dn(0, 2, 0xFFFF);
     f_logic(2, rd16(0x006DA6 + 2 * 0x16));
 }
+
+/* --------------------------------------------------------------- waits */
+
+#define VBLANK_COUNT     0xFF0500   /* incremented by every VBlank */
+#define FRAME_TICKS      0xFFC724   /* counted up by the VBlank handler */
+
+/* Wait for the next VBlank ($6D4E). */
+void wait_vblank(void)
+{
+    wr16(VBLANK_COUNT, 0);
+    while (!rd16(VBLANK_COUNT))
+        m68k_idle(0x006D54);
+}
+
+void wait_vblank_68k(void)
+{
+    wait_vblank();
+    f_logic(2, rd16(VBLANK_COUNT));
+}
+
+/* Wait until the VBlank handler has counted the frame tick counter up to
+   8, and restart it ($6D5E). */
+void wait_frame_ticks(void)
+{
+    do
+        wait_vblank();
+    while ((int16_t)rd16(FRAME_TICKS) < 8);
+    wr16(FRAME_TICKS, 0);
+}
+
+void wait_frame_ticks_68k(void) { wait_frame_ticks(); }

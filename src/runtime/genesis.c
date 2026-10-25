@@ -258,6 +258,23 @@ void m68k_event(uint32_t pc)
     }
 }
 
+/*
+ * Let time pass until the next event for handwritten code that waits
+ * (for VBlank): replay jumps the instruction count to the next recorded
+ * interrupt, live play the cycle count to the next scanline. pc is the
+ * original's address for the stacked return of an interrupt.
+ */
+void m68k_idle(uint32_t pc)
+{
+    if (gen_replay) {
+        if (m68k_icount_event != UINT64_MAX && m68k_icount < m68k_icount_event)
+            m68k_icount = m68k_icount_event;
+    } else if (m68k_cycles < m68k_cycles_event) {
+        m68k_cycles = m68k_cycles_event;
+    }
+    m68k_event(pc);
+}
+
 /* ---------------------------------------------------------------- reset */
 
 void gen_init(const uint8_t *rom, uint32_t size)

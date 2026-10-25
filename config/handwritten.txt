@@ -153,3 +153,5 @@
 0086D2  race_start_frame_68k
 008B58  race_frame_end_68k
 0089B6  demo_frame_end_68k
+006D4E  wait_vblank_68k
+006D5E  wait_frame_ticks_68k
