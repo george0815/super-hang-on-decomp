@@ -17,6 +17,25 @@
 
 static int frame, frames, nshots, shots[64];
 static const char *outdir;
+
+#ifdef SHO_PROFILE
+uint32_t m68k_profile[0x8000];
+
+/* address and count of every original instruction that ran */
+static void write_profile(void)
+{
+    char path[512];
+    FILE *f;
+    int i;
+    snprintf(path, sizeof path, "%s/profile.txt", outdir);
+    f = fopen(path, "w");
+    if (!f) { perror(path); return; }
+    for (i = 0; i < 0x8000; i++)
+        if (m68k_profile[i])
+            fprintf(f, "%06X %u\n", 2 * i, m68k_profile[i]);
+    fclose(f);
+}
+#endif
 static struct { int first, last; uint16_t pad; } script[1024];
 static int nscript;
 static FILE *wav, *ymlog;
@@ -155,6 +174,9 @@ int main(int argc, char **argv)
         sscanf(getenv("SHO_MIX"), "%d,%d,%d,%d", &sound_settings.master,
                &sound_settings.group[SND_MUSIC], &sound_settings.group[SND_ENGINE],
                &sound_settings.group[SND_EFFECTS]);
+#ifdef SHO_PROFILE
+    atexit(write_profile);
+#endif
     gen_init(rom, (uint32_t)len);
     gen_run();
     return 0;

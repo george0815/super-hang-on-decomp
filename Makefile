@@ -68,6 +68,14 @@ port: build/shangon
 build/livetest: tests/livetest.c $(RUNTIME) $(RTHDRS) build/recomp/sho_code.o
 	$(CC) $(RCFLAGS) -o $@ tests/livetest.c $(RUNTIME) build/recomp/sho_code.o -lm
 
+# livetest that also writes OUTDIR/profile.txt: which original (recompiled)
+# instructions still run, and how often; summarise with tools/profile.py
+build/recomp/sho_code_profile.o: build/recomp/sho_code.c src/runtime/m68k_rt.h
+	$(CC) $(RCFLAGS) -DSHO_PROFILE -c build/recomp/sho_code.c -o $@
+
+build/profile: tests/livetest.c $(RUNTIME) $(RTHDRS) build/recomp/sho_code_profile.o
+	$(CC) $(RCFLAGS) -DSHO_PROFILE -o $@ tests/livetest.c $(RUNTIME) build/recomp/sho_code_profile.o -lm
+
 # whole-game replay against the reference recording
 replay: build/replay
 	build/replay $(ROM) build/ref/race.events build/ref/race.vtrace

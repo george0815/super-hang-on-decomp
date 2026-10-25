@@ -107,3 +107,55 @@ void vdp_init_registers_68k(void)
     cpu.a[5] = VDP_DATA;
     f_logic(2, 0);
 }
+
+/* ------------------------------------------------------------- more */
+
+/* The first $310 words of VRAM (the logo's tiles) from a0 ($7FE8). */
+void vdp_logo_tiles(uint32_t src)
+{
+    vdp_copy(0x40000000, src, 0x310);
+}
+
+void vdp_logo_tiles_68k(void)
+{
+    vdp_logo_tiles(cpu.a[0]);
+    set_dn(1, 2, 0xFFFF);
+}
+
+/*
+ * Write 24 rows of 64 name table entries from the unpacked map
+ * ($FFEB14, rows $AA bytes apart) to the VDP data port, each plus `add`
+ * (tile base and palette) ($F3A0). The VRAM address is already set.
+ */
+void vdp_map_rows(uint16_t add)
+{
+    uint32_t src = 0xFFEB14;
+    int row, k;
+    for (row = 0; row < 24; row++, src += 0x2A)
+        for (k = 0; k < 64; k++, src += 2)
+            wr16(VDP_DATA, (uint16_t)(rd16(src) + add));
+}
+
+void vdp_map_rows_68k(void) { vdp_map_rows((uint16_t)cpu.d[7]); }
+
+/*
+ * Palette record ($8448): byte offset into the palette buffer, byte count
+ * minus one, then the colour words. Marks the palette for upload.
+ */
+uint32_t palette_load(uint32_t rec)
+{
+    uint32_t dst = 0xFFD380 + rd8(rec);
+    int n = rd8(rec + 1) + 1, k;
+    wr8(VDP_PALETTE_DIRTY, rd8(VDP_PALETTE_DIRTY) | 1);
+    rec += 2;
+    for (k = 0; k < n; k++, rec += 2)
+        wr16(dst + 2 * k, rd16(rec));
+    return rec;
+}
+
+void palette_load_68k(void)
+{
+    cpu.a[6] = palette_load(cpu.a[6]);
+    cpu.d[0] = 0xFFFF;
+    cpu.d[1] = 0;
+}

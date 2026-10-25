@@ -18,6 +18,7 @@
 
 #define VDP_MODE_SHADOW   0xFFC700  /* copies of the VDP mode register commands
                                        $80xx/$81xx (reg 1 byte at $FFC703) */
+#define VDP_PALETTE_DIRTY 0xFFC708  /* bit 0: upload the palette buffer */
 #define SOUND_LOCKED      0xFFC754  /* nonzero: don't send sound commands */
 #define OBJ_LAYER_LISTS   0xFFE000  /* per-layer object lists, $20 bytes each,
                                        growing down from here (see obj_add_to_layer) */
@@ -43,6 +44,13 @@ void vdp_init_registers(void);
 void vdp_fill(uint32_t command, uint16_t value, int count);
 void vdp_copy(uint32_t command, uint32_t src, int count);
 void vdp_copy_rect(uint32_t command, uint32_t src, int width, int height);
+void vdp_logo_tiles(uint32_t src);
+void vdp_map_rows(uint16_t add);
+uint32_t palette_load(uint32_t rec);
+
+/* ------------------------------------------------------------ unpack.c */
+uint32_t rle_unpack(uint32_t src, uint32_t dst, uint32_t *src_end);
+void map_unpack(uint32_t src);
 
 /* ---------------------------------------------------------- nemesis.c */
 void nemesis_to_vdp(uint32_t src);

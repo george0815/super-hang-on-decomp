@@ -439,13 +439,16 @@ class FuncGen:
                 out.append('cpu.a[%d] = ea;' % mem.reg)
 
     def goto(self, t):
+        if t != self.entry and t in self.rg.hand:
+            # a handwritten function: tail call it rather than copy its original
+            return '{ %s(); return; }' % self.rg.fname(t)
         return 'goto L_%06X;' % t
 
     # ------------------------------------------------------------- body
 
     def generate(self, name=None, storage=''):
         x = self.rg.dis
-        body = self.rg.body(self.entry)
+        body = self.rg.body(self.entry, self.rg.hand)
         order = sorted(body)
         out = ['%svoid %s(void)' % (storage, name or self.rg.fname(self.entry)), '{']
         if self.entry != order[0]:
@@ -466,8 +469,8 @@ class FuncGen:
             if not ends:
                 nxt = a + i.size
                 if k + 1 >= len(order) or order[k + 1] != nxt:
-                    if nxt in body:
-                        out.append('    goto L_%06X;' % nxt)
+                    if nxt in body or nxt in self.rg.hand:
+                        out.append('    ' + self.goto(nxt))
                     else:
                         out.append('    m68k_fault("ran off end of code", %s); return;' % hx(nxt))
         out.append('}')
@@ -514,17 +517,20 @@ class Recompiler:
         self.dis.trace()
         self.hints = hints
         self.names = self.dis.labels()
+        self.hand = set()   # handwritten entries (set by write)
 
     def fname(self, a):
         return 'f_%06X' % a
 
-    def body(self, f):
+    def body(self, f, stop=()):
+        """addresses reachable from f without a call; entries in stop (other
+        than f) are left out, to be reached by a tail call instead"""
         x = self.dis
         seen = set()
         st = [f]
         while st:
             a = st.pop()
-            if a in seen or a not in x.insns:
+            if a in seen or a not in x.insns or (a != f and a in stop):
                 continue
             seen.add(a)
             i = x.insns[a]
@@ -551,6 +557,7 @@ class Recompiler:
             h.write('\nint sho_is_entry(uint32_t addr);\n#endif\n')
         hand, ignore = load_handwritten(os.path.join(ROOT, 'config', 'handwritten.txt'), True)
         flow = Flow(self)
+        self.hand = set(hand)
         with open(os.path.join(outdir, 'interfaces.txt'), 'w') as itf:
             itf.write('# function  inputs | outputs read by callers | outputs that only pass through\n'
                       '# callers\' returns (from tools/flow.py; verification compares the first set)\n')

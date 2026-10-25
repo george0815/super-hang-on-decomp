@@ -53,3 +53,10 @@
 00F066  road_hills_68k
 00BBFC  hud_numbers_68k
 00EB86  scroll_tables_68k
+007FE8  vdp_logo_tiles_68k
+008538  rle_unpack_68k
+0084F0  map_unpack_68k
+00F3A0  vdp_map_rows_68k
+008448  palette_load_68k
+00BB76  hud_map_marker_68k
+008D26  crash_start_68k

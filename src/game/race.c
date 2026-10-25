@@ -2192,3 +2192,37 @@ void scroll_tables_68k(void)
     cpu.d[4] = scroll_d4;
     set_dn(5, 2, scroll_d5);
 }
+
+/* Move the bike marker along the HUD course map ($BB76): two tiles of
+   the marker strip chosen by the progress at $FF0530. */
+static void hud_map_marker(void)
+{
+    uint16_t progress = rd16(0xFF0530);
+    if (rd16(SOUND_LOCKED))
+        return;
+    if (rd16(HUD_HIDDEN)) {
+        wr32(VDP_CTRL, 0x52060003 + ((uint32_t)(rd8(0xFF0530) & 0xF8) << 16));
+        wr32(VDP_DATA, rd32(0x00C3B8 + ((progress & 0x780) >> 4)));
+        wr32(VDP_DATA, rd32(0x00C3B8 + ((progress & 0x780) >> 4) + 4));
+    } else {
+        wr32(VDP_CTRL, 0x53040003 + ((uint32_t)(rd8(0xFF0530) & 0xFC) << 16));
+        wr32(VDP_DATA, rd32(0x00C398 + ((progress & 0x380) >> 5)));
+    }
+}
+
+void hud_map_marker_68k(void) { hud_map_marker(); }
+
+/* A new crash (hit count changed): start the rider and bike crash
+   objects ($8D26). */
+static void crash_start(void)
+{
+    int k;
+    if (rd16(0xFF0666) || rd16(0xFF0656) == rd16(0xFF0658))
+        return;
+    for (k = 0; k < 0x80; k += 4)
+        wr32(0xFFC940 + k, 0);
+    wr16(0xFFC940, 0x3C);
+    wr16(0xFFC980, 0x40);
+}
+
+void crash_start_68k(void) { crash_start(); }
