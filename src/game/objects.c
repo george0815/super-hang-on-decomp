@@ -322,11 +322,154 @@ static void obj_approacher(uint32_t obj)
         obj_add_to_layer(obj);
 }
 
+/*
+ * Rider overlay on the bike ($711A): frame and DMA tile source from the
+ * bike's lean and race state, three palette entries into the palette
+ * buffer; plays a sound when entering or leaving state $20.
+ */
+#define PALETTE_DIRTY    0xFFC708
+static void obj_rider(uint32_t obj)
+{
+    uint32_t pal;
+    uint16_t state, i;
+    int count_down;
+
+    if (!(rd16(0xFF066A) | rd16(0xFF06B8)))
+        wr16(obj + 0x36, 0x0C);
+    if (rd16(0xFFC794) == 0x10)
+        return;
+    wr16(0xFF0622, rd16(0xFF0614));
+    if (rd16(0xFF06BC))
+        return;
+
+    if (rd16(0xFF0666))
+        goto sounds;
+    if (rd16(0xFF066A)) {
+        uint16_t k = (uint16_t)(rd16(0xFF060C) * 9 + rd16(0xFFC806));
+        pal = 0x00A914 + rd8(0x00A8F0 + k);
+        state = 0;
+        count_down = 1;
+    } else if (rd16(0xFF06B8)) {
+        pal = 0x00A92C;
+        state = 0x20;
+        count_down = 1;
+    } else if (rd16(0xFF0626)) {
+        wr16(0xFF0626, 0);
+        pal = 0x00A92C;
+        state = 0;
+        count_down = 0;
+    } else {
+        wr16(obj + 0x3C, 0xFFFF);
+        goto sounds;
+    }
+
+    if (count_down && rd16(HUD_HIDDEN) && !rd16(0xFFB652)) {
+        int16_t t = (int16_t)(rd16(obj + 0x36) - 1);
+        wr16(obj + 0x36, (uint16_t)t);
+        if (t < 0) {
+            wr16(0xFFB652, rd16(0xFFB652) - 1);
+            wr16(0xFFC894, rd16(0xFFC894) + 1);
+            wr16(0xFF0656, rd16(0xFF0656) + 1);
+        }
+    }
+    wr16(obj + 0x3C, state);
+    if (!rd16(OBJECTS_FROZEN)) {
+        if (rd16(obj + 0x38)) {
+            wr16(obj + 0x38, rd16(obj + 0x38) - 1);
+        } else {
+            wr16(obj + 0x38, 1);
+            wr16(obj + 0x3A, rd16(obj + 0x3A) + 8);
+        }
+    }
+    wr32(0xFFD3BA, rd32(pal));
+    wr16(0xFFD3BE, rd16(pal + 4));
+    wr8(PALETTE_DIRTY, rd8(PALETTE_DIRTY) | 1);
+
+    i = rd16(obj + 0x3A) & 0x18;
+    if (state) {
+        i += state;
+        if ((int8_t)rd8(PLAYER + OBJ_SPRITE_SET) > 4)
+            i += 0x20;
+    }
+    wr16(obj + OBJ_SPRITE_MAP, rd16(0x00A896 + i));
+    wr32(0xFFC7B6, rd32(0x00A890 + i));
+    wr32(0xFFC7BA, rd32(0x00A894 + i));
+    wr16(obj + OBJ_SCREEN_X, rd16(PLAYER + OBJ_SCREEN_X));
+    wr16(obj + OBJ_SCREEN_Y, rd16(PLAYER + OBJ_SCREEN_Y));
+    if (!state)
+        wr16(obj + OBJ_SCREEN_X, rd16(obj + OBJ_SCREEN_X) +
+             rd16(0x00A880 + 2 * rd8(PLAYER + OBJ_SPRITE_SET)));
+    obj_add_to_layer(obj);
+
+sounds:
+    /* sound on entering / leaving state $20 */
+    {
+        uint16_t prev = rd16(obj + OBJ_ANIM), now = rd16(obj + 0x3C);
+        if (prev != 0x20 && now == 0x20)
+            sound_command(0x9C);
+        else if (prev == 0x20 && now != 0x20)
+            sound_command(0xB3);
+        wr16(obj + OBJ_ANIM, now);
+    }
+}
+
+/* Write 1 to a byte of the sound driver's mailbox (Z80 bus held). */
+static void sound_flag(uint32_t addr)
+{
+    do
+        wr16(Z80_BUSREQ, 0x100);
+    while (rd8(Z80_BUSREQ) & 1);
+    wr8(addr, 1);
+    wr16(Z80_BUSREQ, 0);
+}
+
+#define PAUSED          0xFF08D4
+#define PAD1_PRESSED    0xFFC707
+#define SOUND_PAUSE     0xA01C08
+#define SOUND_RESUME    0xA01C09
+
+/* Start toggles pause: objects freeze, the music pauses, the icon blinks ($7122). */
+static void obj_pause(uint32_t obj)
+{
+    uint8_t f = rd8(obj + OBJ_FLAGS);
+    wr8(obj + OBJ_FLAGS, f | 1);
+    if (!(f & 1)) {
+        wr16(obj + OBJ_Z, 0xC0);
+        wr16(obj + OBJ_SCREEN_X, 0xF8);
+        wr16(obj + OBJ_SCREEN_Y, 0xF8);
+        wr16(obj + OBJ_SPRITE_MAP, 0x3A38);
+    }
+    if (rd16(PAUSED)) {
+        int8_t blink;
+        if (rd8(PAD1_PRESSED) & 0x80) {
+            wr16(PAUSED, 0);
+            wr16(OBJECTS_FROZEN, 0);
+            sound_flag(SOUND_RESUME);
+            return;
+        }
+        blink = (int8_t)(rd8(obj + OBJ_SPRITE_SET) - 1);
+        if (blink < 0)
+            blink = 0x1F;
+        wr8(obj + OBJ_SPRITE_SET, (uint8_t)blink);
+        if (blink > 0x0F)
+            obj_add_to_layer(obj);
+        return;
+    }
+    if (rd8(PAD1_PRESSED) & 0x80) {
+        wr8(obj + OBJ_SPRITE_SET, 0xFF);
+        wr16(PAUSED, 0xFFFF);
+        wr16(OBJECTS_FROZEN, 0xFFFF);
+        sound_flag(SOUND_PAUSE);
+    }
+}
+
 /* Handlers by index; NULL ones still run recompiled. */
 static void (*const handlers[25])(uint32_t obj) = {
     [(0x710A - 0x710A) / 4] = obj_debris,
     [(0x7112 - 0x710A) / 4] = obj_bike_overlay,
     [(0x7116 - 0x710A) / 4] = obj_bike_overlay_2,
+    [(0x711A - 0x710A) / 4] = obj_rider,
+    [(0x7122 - 0x710A) / 4] = obj_pause,
     [(0x7132 - 0x710A) / 4] = obj_approacher,
     [(0x711E - 0x710A) / 4] = obj_blinker,
     [(0x714A - 0x710A) / 4] = obj_line_marker,
