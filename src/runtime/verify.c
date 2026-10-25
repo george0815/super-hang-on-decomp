@@ -208,8 +208,21 @@ void verify_call(uint32_t addr, const char *name, void (*original)(void),
                 if (i < stack_lo) continue;
                 if (i == HBLANK_OPERAND || i == HBLANK_OPERAND + 1) continue;
                 if (m68k_ram[i] != ram_after[i]) {
-                    snprintf(msg, sizeof msg, "ram[FF%04X] = %02X, original %02X (was %02X)",
-                             i, m68k_ram[i], ram_after[i], ram_before[i]);
+                    /* report up to six differing bytes */
+                    int len = snprintf(msg, sizeof msg, "ram[FF%04X] = %02X, original %02X (was %02X)",
+                                       i, m68k_ram[i], ram_after[i], ram_before[i]);
+                    int more = 0;
+                    uint32_t j;
+                    if (getenv("VERIFY_OBJDIFF"))   /* debug: object table differences */
+                        for (j = 0xC900; j < 0xD000; j++)
+                            if (m68k_ram[j] != ram_after[j])
+                                fprintf(stderr, "   obj %d +%02X: %02X/%02X (was %02X)\n", (j - 0xC900) / 0x40,
+                                        (j - 0xC900) % 0x40, m68k_ram[j], ram_after[j], ram_before[j]);
+                    for (j = i + 1; j < 0x10000 && more < 5; j++)
+                        if (m68k_ram[j] != ram_after[j] && j != HBLANK_OPERAND && j != HBLANK_OPERAND + 1) {
+                            len += snprintf(msg + len, sizeof msg - len, "; FF%04X=%02X/%02X", j, m68k_ram[j], ram_after[j]);
+                            more++;
+                        }
                     break;
                 }
             }

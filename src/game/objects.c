@@ -58,6 +58,7 @@ void obj_add_to_layer_68k(void)
 #define OBJ_LANE        0x2A    /* word: lateral offset on the road */
 
 #define HUD_HIDDEN      0xFFC82C
+#define SOUND_LOCKED_BYTE 0xFFC754
 #define ROAD_Y_LINES    0xFF0F00  /* per scanline: road height x16 */
 #define ROAD_X_LINES    0xFF0D00  /* per scanline: road centre x64 */
 #define BIKE_SPEED      0xFF064A
@@ -1265,6 +1266,335 @@ static void obj_player_bike(uint32_t obj)
     obj_add_to_layer(obj);
 }
 
+/* ------------------------------------------------------------ rivals */
+
+#define RIVAL_LATERAL   0x08      /* word: lane position */
+#define RIVAL_SMOOTH_X  0x04      /* word: smoothing state for screen x */
+#define RIVAL_ACCEL     0x0A      /* word: speed adjustment */
+#define RIVAL_BOOST     0x30
+#define RIVAL_TARGET    0x32
+#define RIVAL_LIFE      0x36      /* long: frames alive */
+#define RIVAL_BLOCKED   0x3A      /* byte: bit 0 player on the left, 1 right, 2 push */
+#define RIVAL_TOUCHING  0x3B
+#define RIVAL_BEND      0x3C      /* byte: how sharply the road bends there */
+#define RIVAL_WIPEOUT   0x3D
+#define RIVAL_WIPE_STEP 0x3E
+#define RIVAL_WIPE_X    0x34
+
+#define ROM_RIVAL_WIDTHS   0x00D3B4
+#define ROM_RIVAL_LINES    0x00CFB4
+#define ROM_RIVAL_SPEEDS   0x00D3EE
+#define ROM_BEND_STEPS     0x00D43E
+#define ROM_BEND_FRAMES    0x00D436
+#define ROAD_BEND_LINES    0xFF0B00
+
+#define SCORE_ADD       0xFF0548
+#define SCORE           0xFF054C
+#define TOP_SCORE       0xFF0550
+
+/* Add SCORE_ADD to the BCD score, capped at 99999999; new top score ($95E8). */
+void score_add(void)
+{
+    int i;
+    uint8_t carry = 0;
+    if (rd16(HUD_HIDDEN))
+        return;
+    for (i = 3; i >= 0; i--) {
+        uint8_t a = rd8(SCORE_ADD + i), b = rd8(SCORE + i);
+        unsigned lo = (a & 0x0f) + (b & 0x0f) + carry, sum;
+        if (lo > 9) lo += 6;
+        sum = (a & 0xf0) + (b & 0xf0) + lo;
+        carry = sum > 0x9f;
+        if (carry) sum += 0x60;
+        wr8(SCORE + i, (uint8_t)sum);
+    }
+    if (carry)
+        wr32(SCORE, 0x99999999);
+    if (rd32(SCORE) >= rd32(TOP_SCORE))
+        wr32(TOP_SCORE, rd32(SCORE));
+}
+
+static void rival_reset(uint32_t obj)            /* $D90A */
+{
+    wr16(obj + OBJ_DISTANCE, 0);
+    wr16(obj + OBJ_Z, 0);
+    wr16(obj + OBJ_SPRITE_MAP, 0);
+    wr32(obj + RIVAL_LIFE, 0);
+    wr8(obj + RIVAL_WIPE_STEP, 0);
+    wr8(obj + RIVAL_WIPEOUT, 0);
+    wr8(obj + OBJ_FLAGS, rd8(obj + OBJ_FLAGS) & ~1);
+}
+
+/* Touching the player nudges the bike; a new touch plays a sound and may
+   make the rival wipe out. */
+static void rival_contact(uint32_t obj)
+{
+    uint8_t touch = 0, prev;
+    if ((int16_t)rd16(obj + OBJ_Z) >= 0xA0) {
+        int16_t reach = (int16_t)(rd16(ROM_RIVAL_WIDTHS + 2 * (int8_t)rd8(obj + RIVAL_BEND)) + 0x0A);
+        int16_t gap = (int16_t)(rd16(obj + OBJ_SCREEN_X) - 0x120);
+        if ((gap < 0 ? -gap : gap) <= reach) {
+            int16_t lim = (int16_t)rd16(0x009F9A);
+            int16_t push = (int16_t)rd16(0x009F98);
+            if ((int16_t)(rd16(obj + OBJ_SCREEN_X) - 0x120) < 0)
+                push = (int16_t)-push;
+            push = (int16_t)(push + rd16(BIKE_PUSH));
+            if (push <= lim && push >= -lim)
+                wr16(BIKE_PUSH, (uint16_t)push);
+            touch = 0x92;
+        }
+    }
+    prev = rd8(obj + RIVAL_TOUCHING);
+    wr8(obj + RIVAL_TOUCHING, touch);
+    if (prev || !touch)
+        return;
+    wr8(0xFFC80D, touch);
+    if (rd16(HUD_HIDDEN) && !rd16(0xFF06BC)) {
+        wr16(0xFFB64E, rd16(0xFFB64E) - 1);
+        wr16(0xFFB648, rd16(0xFFB648) - 1);
+        if ((int16_t)rd16(0xFFB648) < 0) {
+            wr16(0xFFC894, rd16(0xFFC894) + 1);
+            wr16(0xFF0656, rd16(0xFF0656) + 1);
+        }
+    }
+    if (rng_next() & 1)
+        wr8(obj + RIVAL_WIPEOUT, 0xFF);
+}
+
+/* Note which side the player is on when close behind. */
+static void rival_watch_player(uint32_t obj)
+{
+    int16_t gap;
+    if ((int16_t)rd16(obj + OBJ_Z) <= 0x70)
+        return;
+    gap = (int16_t)(rd16(obj + OBJ_SCREEN_X) - 0x120);
+    if ((gap < 0 ? -gap : gap) >= 0x38)
+        return;
+    wr8(obj + RIVAL_BLOCKED, rd8(obj + RIVAL_BLOCKED) | (gap < 0 ? 1 : 2));
+    wr8(0xFF068E, rd8(0xFF068E) | rd8(obj + RIVAL_BLOCKED));
+}
+
+/* Move the lane by d, unless that side is blocked or it would leave the road. */
+static void rival_shift(uint32_t obj, int16_t d)
+{
+    int16_t lane;
+    if (rd8(obj + RIVAL_BLOCKED) & (d > 0 ? 1 : 2))
+        return;
+    lane = (int16_t)(d + rd16(obj + RIVAL_LATERAL));
+    if ((lane < 0 ? -lane : lane) < 0xFA)
+        wr16(obj + RIVAL_LATERAL, (uint16_t)lane);
+}
+
+/* Lane changes following the course's turns ($D55A-$D614). */
+static void rival_steer(uint32_t obj)
+{
+    uint16_t turn = rd16(0xFF0676), next = rd16(0xFF067E);
+    int toward;
+    if ((int16_t)rd16(obj + OBJ_Z) >= 0xAF)
+        return;
+    if (turn != next) {
+        if (turn == 2 || (turn == 1 && next == 2)) {
+            rival_shift(obj, -4);
+            return;
+        }
+        if (turn == 3 || (turn == 1 && next != 1)) {
+            rival_shift(obj, 4);
+            return;
+        }
+    }
+    if (next == 2) {
+        rival_shift(obj, 4);
+    } else if (next == 1) {
+        int16_t target = (int16_t)rd16(obj + OBJ_LANE), lane = (int16_t)rd16(obj + RIVAL_LATERAL);
+        if (target == lane)
+            return;
+        toward = target > lane;
+        if (rd8(obj + RIVAL_BLOCKED) & (toward ? 1 : 2))
+            return;
+        wr16(obj + RIVAL_LATERAL, (uint16_t)(lane + (toward ? 6 : -6)));
+    } else {
+        rival_shift(obj, -4);
+    }
+}
+
+/* Speed relative to the player; returns 0 if the rival was reset. */
+static int rival_speed(uint32_t obj)
+{
+    int16_t accel, adj, rel;
+    uint16_t course, idx;
+
+    if (rd16(0xFF0652))
+        wr16(obj + RIVAL_BOOST, rd16(obj + RIVAL_BOOST) + 1);
+    else if (rd16(obj + RIVAL_BOOST))
+        wr16(obj + RIVAL_BOOST, rd16(obj + RIVAL_BOOST) - 1);
+
+    if (rd8(obj + RIVAL_BLOCKED) & 4) {
+        wr16(obj + RIVAL_ACCEL, rd16(obj + RIVAL_ACCEL) + 1);
+    } else if (rd8(obj + 0x39) & 1) {
+        int16_t target = (int16_t)rd16(obj + RIVAL_TARGET), a = (int16_t)rd16(obj + RIVAL_ACCEL);
+        if (target != a)
+            wr16(obj + RIVAL_ACCEL, (uint16_t)(a + (target > a ? 1 : -1)));
+    }
+    accel = (int16_t)rd16(obj + RIVAL_ACCEL);
+    if (rd16(obj + RIVAL_BOOST)) {
+        adj = (int16_t)f_divu(rd16(0x009F9C), (uint32_t)(int32_t)(int16_t)rd16(obj + RIVAL_BOOST));
+        if (adj > 0x26)
+            adj = 0x26;
+        accel = (int16_t)(accel + adj);
+    }
+    course = (rd8(SOUND_LOCKED_BYTE) || rd16(HUD_HIDDEN)) ? 0 : rd16(0xFF053C);
+    idx = (uint16_t)(course * 18 + rd16(0xFF060A) * 2);
+    rel = (int16_t)(rd16(BIKE_SPEED) - rd16(ROM_RIVAL_SPEEDS + idx));
+    accel = (int16_t)(accel + ((int16_t)(rel * 10) >> 4));
+    if (rd8(obj + RIVAL_WIPEOUT))
+        accel = (int16_t)rd16(0x009F9E);
+    wr16(obj + OBJ_DISTANCE, (uint16_t)(rd16(obj + OBJ_DISTANCE) + accel * 2));
+
+    if ((int16_t)rd16(obj + OBJ_DISTANCE) < 0) {
+        int16_t c = (int16_t)rd16(ROAD_CURVE);
+        /* dropped behind: only kept (and respawned ahead) while the
+           player is off the road and slow */
+        if ((c < 0 ? -c : c) <= 0x12C || (int16_t)rd16(BIKE_SPEED) > 0x78) {
+            rival_reset(obj);
+            return 0;
+        }
+        if (!rd32(obj + RIVAL_LIFE))
+            wr16(obj + OBJ_DISTANCE, 0x1FC0);
+    }
+    wr32(obj + RIVAL_LIFE, rd32(obj + RIVAL_LIFE) + 1);
+    return 1;
+}
+
+/* Passed by the player: points and a sound if close ($D8CE). */
+static void rival_overtaken(uint32_t obj)
+{
+    int16_t gap = (int16_t)(rd16(obj + OBJ_SCREEN_X) - 0x120);
+    uint8_t sfx = 0xAB;
+    wr16(0xFF064E, rd16(0xFF064E) + 1);
+    if (gap < 0) {
+        sfx = 0xAA;
+        gap = (int16_t)-gap;
+    }
+    if (gap <= 0x80) {
+        wr8(0xFFC80D, sfx);
+        wr16(0xFFC826, 0x0F);
+        wr16(0xFFC828, 0);
+    }
+    wr32(SCORE_ADD, 0x00020000);
+    score_add();
+    rival_reset(obj);
+}
+
+/* Distance -> screen position, lean frame and wipe-out slide ($D708). */
+static int rival_project(uint32_t obj)
+{
+    int16_t far = (int16_t)rd16(obj + OBJ_DISTANCE) >> 4, x, d1, smooth, half;
+    uint16_t line, bend_line;
+    int32_t lane;
+    int up, k;
+
+    if (far > 0x1FC) {
+        rival_overtaken(obj);
+        return 0;
+    }
+    if (far < 0) {
+        rival_reset(obj);
+        return 0;
+    }
+    line = rd16(ROM_RIVAL_LINES + 2 * far) >> 4;
+    wr16(obj + OBJ_ROAD_LINE, line);
+    wr16(obj + OBJ_Z, line > 0xBF ? 0xBF : line);
+    wr16(obj + OBJ_SCREEN_Y, road_screen_y(line, 0x100));
+
+    lane = ((int32_t)(int16_t)line * (int16_t)rd16(obj + RIVAL_LATERAL)) << 6;
+    x = (int16_t)((int16_t)(rd16(ROAD_X_LINES + 2 * line) + (int16_t)(lane / 0xE0)) >> 6);
+    d1 = (int16_t)(x - rd16(obj + RIVAL_SMOOTH_X));
+    if ((uint16_t)(d1 < 0 ? -d1 : d1) >= 4)
+        wr16(obj + RIVAL_SMOOTH_X, (uint16_t)x);
+    smooth = (int16_t)(rd16(obj + RIVAL_SMOOTH_X) + x);
+    half = (int16_t)(smooth >> 1);
+    wr16(obj + RIVAL_SMOOTH_X, (uint16_t)(smooth - half));
+    wr16(obj + OBJ_SCREEN_X, (uint16_t)(half + 0x120));
+
+    /* how sharply the road bends at this depth picks the lean frame */
+    bend_line = (uint16_t)(((uint32_t)line * 0x54) >> 8);
+    {
+        int16_t bend = (int16_t)(rd16(ROAD_BEND_LINES + 2 * line) - rd16(ROAD_BEND_LINES + 2 * bend_line));
+        up = 1;
+        if (bend < 0) {
+            up = 0;
+            bend = (int16_t)-bend;
+        }
+        for (k = 0; bend > (int16_t)rd16(ROM_BEND_STEPS + 2 * k); k++)
+            ;
+    }
+    wr8(obj + RIVAL_BEND, (uint8_t)k);
+    wr8(obj + OBJ_SPRITE_SET, rd8(ROM_BEND_FRAMES + up * 4 + k));
+
+    if (rd8(obj + RIVAL_WIPEOUT)) {
+        int16_t side = (int16_t)(rd16(obj + OBJ_SCREEN_X) - 0x120), dx;
+        if (!rd8(obj + RIVAL_WIPE_STEP))
+            wr16(obj + RIVAL_WIPE_X, (uint16_t)side);
+        wr8(obj + OBJ_SPRITE_SET, side < 0 ? 7 : 0x0D);
+        dx = (int16_t)(rd8(obj + RIVAL_WIPE_STEP) * 4);
+        if ((int16_t)rd16(obj + RIVAL_WIPE_X) < 0)
+            dx = (int16_t)-dx;
+        x = (int16_t)(dx * 2 + rd16(obj + OBJ_SCREEN_X));
+        if (x > 0x1E8) x = 0x1E8;
+        else if (x <= 0x58) x = 0x58;
+        wr16(obj + OBJ_SCREEN_X, (uint16_t)x);
+        wr8(obj + RIVAL_WIPE_STEP, rd8(obj + RIVAL_WIPE_STEP) + 1);
+    }
+    return 1;
+}
+
+/* Per-frame record for the race code, and the gap to the player. */
+static void rival_record(uint32_t obj)
+{
+    uint32_t rec = 0xFF0804 + (uint16_t)(rd16(0xFF068A) * 8);
+    uint32_t gap_slot = sx16(rd16(0xFFC81A));
+    uint16_t gap;
+    wr16(0xFF068A, rd16(0xFF068A) + 1);
+    wr32(rec, 0xFF000000u | obj);
+    wr16(rec + 4, rd16(obj + RIVAL_LATERAL));
+    wr16(rec + 6, rd16(obj + OBJ_Z));
+    wr8(obj + RIVAL_BLOCKED, 0);
+    wr16(0xFFC81A, rd16(0xFFC81A) + 2);
+    if (!rd16(0xFF060A) && (int16_t)rd16(0xFF0616) < 0x20) {
+        gap = 0xFFFF;
+    } else {
+        uint16_t dz = (uint16_t)(rd16(PLAYER + OBJ_Z) - rd16(obj + OBJ_Z));
+        int16_t dx = (int16_t)(rd16(obj + OBJ_SCREEN_X) - 0x120);
+        uint16_t ax = (uint16_t)(dx < 0 ? -dx : dx);
+        gap = (uint16_t)((dz < 0x28 ? 0 : dz - 0x28) + (ax < 0x50 ? 0 : ax - 0x50));
+    }
+    wr16(gap_slot, gap);
+    wr16(0xFF0632, rd16(0xFF0632) + rd16(obj + RIVAL_ACCEL));
+}
+
+/* A rival rider ($714E). */
+static void obj_rival(uint32_t obj)
+{
+    if (!(rd8(obj + OBJ_FLAGS) & 1))
+        return;
+    if (rd16(OBJECTS_FROZEN)) {
+        obj_add_to_layer(obj);
+        return;
+    }
+    if ((rd16(GAME_MODE) & ~1) != MODE_FINISHED) {
+        rival_contact(obj);
+        rival_watch_player(obj);
+        rival_steer(obj);
+        if (!rival_speed(obj))
+            return;
+    }
+    if (!rival_project(obj))
+        return;
+    obj_pick_sprite(obj, ROM_DEPTH_SPRITES_NEAR);
+    obj_add_to_layer(obj);
+    rival_record(obj);
+}
+
 /* Handlers by index; NULL ones still run recompiled. */
 static void (*const handlers[25])(uint32_t obj) = {
     [(0x710A - 0x710A) / 4] = obj_debris,
@@ -1283,6 +1613,7 @@ static void (*const handlers[25])(uint32_t obj) = {
     [(0x7146 - 0x710A) / 4] = obj_crash_bike,
     [(0x711E - 0x710A) / 4] = obj_blinker,
     [(0x714A - 0x710A) / 4] = obj_line_marker,
+    [(0x714E - 0x710A) / 4] = obj_rival,
     [(0x7152 - 0x710A) / 4] = obj_column_stopper,
 };
 
