@@ -127,3 +127,22 @@ void music_graphics_68k(void)
     cpu.d[0] = 0xFFFF;
     cpu.d[1] = 0;
 }
+
+/* One music select frame after the VBlank ($7DBA): when the countdown
+   runs out, the tune is confirmed as with Start. */
+static void music_select_frame(void)
+{
+    menu_countdown();
+    if (rd8(0xFFC718)) {
+        sound_command(0xB0);
+        call68k(f_006DD4);
+        wr16(0xFFC722, 0);
+        wr16(0xFFC704, 0x10);
+        return;
+    }
+    music_select_input();
+    music_draw();
+    push_start_blink();
+}
+
+void music_select_frame_68k(void) { music_select_frame(); }

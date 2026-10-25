@@ -92,6 +92,8 @@ void race_build_road(void);
 void race_stage(void);
 void hud_map_marker(void);
 void hud_numbers(void);
+void menu_countdown(void);
+void push_start_blink(void);
 void time_tiles(uint32_t time, uint32_t dst);
 
 /* ---------------------------------------------------------- objects.c */

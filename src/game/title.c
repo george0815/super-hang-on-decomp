@@ -313,3 +313,28 @@ static void title_frame(void)
 }
 
 void title_frame_68k(void) { title_frame(); }
+
+/* "PUSH START BUTTON", shown every other 32 frames ($7BBC). */
+void push_start_blink(void)
+{
+    if (rd8(FRAME_COUNTER_BYTE) & 0x20)
+        vdp_copy(0x5B960003, 0x007D10, 0x11);
+    else
+        vdp_fill(0x5B960003, 0, 0x11);
+}
+
+/* One course select frame after the VBlank ($7B24): the countdown, then
+   on to music select when it runs out. */
+static void course_select_frame(void)
+{
+    menu_countdown();
+    if (rd8(0xFFC718)) {
+        next_mode(0x0C);
+        return;
+    }
+    course_select_input();
+    course_select_colours();
+    push_start_blink();
+}
+
+void course_select_frame_68k(void) { course_select_frame(); }

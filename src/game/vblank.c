@@ -557,7 +557,7 @@ void hex_tiles_shown_68k(void)
  * A menu countdown ($7ADC): every 60 frames the BCD count at $FFC71A
  * goes down and is shown in big digits; at zero $FFC718 is set.
  */
-static void menu_countdown(void)
+void menu_countdown(void)
 {
     wr8(0xFFC71B, rd8(0xFFC71B) - 1);
     if (rd8(0xFFC71B))

@@ -144,3 +144,5 @@
 0074A0  title_frame_68k
 0052B2  command_frame_68k
 00615C  shop_frame_68k
+007B24  course_select_frame_68k
+007DBA  music_select_frame_68k
