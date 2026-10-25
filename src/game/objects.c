@@ -1595,6 +1595,60 @@ static void obj_rival(uint32_t obj)
     rival_record(obj);
 }
 
+/*
+ * "Extended play" message after a checkpoint ($7126): blinks by switching
+ * the piece count of its sprite map in RAM ($FFB800), with a beep every 4
+ * frames at first; in original mode it also shows the time of the
+ * segment just finished. When it ends, the next segment's split starts.
+ */
+#define EXTEND_MAP       0xFFB800
+#define EXTEND_TIMER     0x2D
+static void obj_extended_play(uint32_t obj)
+{
+    static const int pick[6] = { 0, 1, 3, 4, 6, 7 };
+    int hidden;
+    if (!rd16(OBJECTS_FROZEN)) {
+        uint8_t t;
+        uint16_t pieces;
+        hidden = rd16(HUD_HIDDEN) != 0;
+        if (!(rd8(obj + OBJ_FLAGS) & 1)) {
+            wr8(obj + OBJ_FLAGS, rd8(obj + OBJ_FLAGS) | 1);
+            wr16(obj + OBJ_Z, 0xBF);
+            wr16(obj + OBJ_SCREEN_Y, 0xE8);
+            wr16(obj + OBJ_SPRITE_MAP, 0xB800);
+            wr16(obj + OBJ_SCREEN_X, hidden ? 0xE8 : 0xC0);
+        }
+        t = (uint8_t)(rd8(obj + EXTEND_TIMER) + 2);
+        wr8(obj + EXTEND_TIMER, t);
+        if (t >= 0xF0) {
+            uint16_t split;
+            wr16(0xFFC7CA, 0);
+            obj_free(obj);
+            wr16(0xFFC8B4, 0);
+            wr8(0xFFC88C, rd8(0xFF0555));
+            split = (uint16_t)(rd16(0xFFC88E) + 1);
+            wr16(0xFFC88E, split);
+            wr32(0xFFC860 + (uint16_t)(split * 8), rd32(0xFFC82E));
+            return;
+        }
+        if (t & 8) {
+            pieces = hidden ? 0x17 : 0x12;
+        } else {
+            pieces = hidden ? 0x19 : 0x15;
+            if (t < 0x78 && !(t & 3))
+                sound_command(0x94);
+        }
+        wr16(EXTEND_MAP, pieces);
+    }
+    if (rd16(HUD_HIDDEN)) {
+        int k;
+        time_tiles(0xFFC861 + (uint16_t)((rd16(0xFF060A) - 1) * 8), 0xFFC8B8);
+        for (k = 0; k < 6; k++)
+            wr16(0xFFB828 + 6 * k, rd16(0xFFC8B8 + 2 * pick[k]));
+    }
+    obj_add_to_layer(obj);
+}
+
 /* Handlers by index; NULL ones still run recompiled. */
 static void (*const handlers[25])(uint32_t obj) = {
     [(0x710A - 0x710A) / 4] = obj_debris,
@@ -1603,6 +1657,7 @@ static void (*const handlers[25])(uint32_t obj) = {
     [(0x7116 - 0x710A) / 4] = obj_bike_overlay_2,
     [(0x711A - 0x710A) / 4] = obj_rider,
     [(0x7122 - 0x710A) / 4] = obj_pause,
+    [(0x7126 - 0x710A) / 4] = obj_extended_play,
     [(0x712A - 0x710A) / 4] = obj_hazard,
     [(0x712E - 0x710A) / 4] = obj_sign,
     [(0x7132 - 0x710A) / 4] = obj_approacher,

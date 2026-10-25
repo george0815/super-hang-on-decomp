@@ -72,6 +72,7 @@ void race_speed(void);
 void race_drift(void);
 void race_build_road(void);
 void race_stage(void);
+void time_tiles(uint32_t time, uint32_t dst);
 
 /* ---------------------------------------------------------- objects.c */
 void obj_add_to_layer(uint32_t obj);

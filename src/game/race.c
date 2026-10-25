@@ -1753,7 +1753,7 @@ static uint32_t digit_pair(uint32_t dst, uint8_t v, int blank)
 }
 
 /* A minutes/seconds/hundredths time as tiles with ' and " ($BC66). */
-static void time_tiles(uint32_t time, uint32_t dst)
+void time_tiles(uint32_t time, uint32_t dst)
 {
     dst = digit_pair(dst, rd8(time), 1);
     wr16(dst, 0xC63C);
