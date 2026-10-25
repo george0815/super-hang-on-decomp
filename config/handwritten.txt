@@ -29,3 +29,7 @@
 # d4.hi: a false dependency through the HUD digit code ($C176 rotates d4 with
 # rol.l; the old upper half is carried along but never extracted)
 00716E  objects_update_68k  ignore=d4.hi
+004512  race_place_objects_68k
+0045E2  start_objects_68k
+009F1C  race_turns_68k
+00468E  race_rivals_68k

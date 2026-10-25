@@ -59,6 +59,9 @@ void vblank_menu(void);
 void vblank_race(void);
 uint16_t char_tile(uint8_t c);
 
+/* ------------------------------------------------------------- race.c */
+void race_place_objects(void);
+
 /* ---------------------------------------------------------- objects.c */
 void obj_add_to_layer(uint32_t obj);
 void objects_update(void);
