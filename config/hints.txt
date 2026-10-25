@@ -34,3 +34,4 @@ code 0052B2 CommandFrame
 code 00615C ShopFrame
 code 007B24 CourseSelectFrame
 code 007DBA MusicSelectFrame
+code 004962 PasswordFrame

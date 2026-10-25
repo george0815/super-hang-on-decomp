@@ -202,7 +202,7 @@ static void password_row(uint32_t cmd, uint32_t codes)
 
 /* Two check bytes over the 24 codes: XOR of the even and odd codes,
    rotated together as a 16-bit pair with feedback ($51DC). */
-static void password_check(uint8_t *hi, uint8_t *lo)
+void password_check(uint8_t *hi, uint8_t *lo)
 {
     uint8_t d1 = 0, d2 = 0;
     int k;

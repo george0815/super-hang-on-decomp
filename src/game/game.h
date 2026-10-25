@@ -94,6 +94,7 @@ void hud_map_marker(void);
 void hud_numbers(void);
 void menu_countdown(void);
 void push_start_blink(void);
+void password_check(uint8_t *hi, uint8_t *lo);
 void time_tiles(uint32_t time, uint32_t dst);
 
 /* ---------------------------------------------------------- objects.c */
