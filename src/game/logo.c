@@ -104,3 +104,99 @@ void logo_walk_68k(void)
     set_dn(4, 2, logo_d4);
     set_dn(5, 2, logo_d5);
 }
+
+/* ------------------------------------------------------------ frame */
+
+#define PAD1_PRESSED     0xFFC707
+#define FRAME_COUNTER_BYTE 0xFFC726
+#define LOGO_SWEEP       0xFF510E   /* two sweep positions */
+
+static void logo_next_mode(void)
+{
+    wr16(0xFFC722, 0);
+    wr16(0xFFC704, 4);                    /* title screen */
+}
+
+/*
+ * One logo frame after the VBlank ($724E). C/Start skips to the title.
+ * While walkers remain, they trace the logo (a new walker waits one
+ * turn); then the logo brightens in 14 steps of $111, and two bands of
+ * colour sweep across it every other frame; after a pause, the title.
+ */
+static void logo_frame(void)
+{
+    if (rd8(PAD1_PRESSED) & 0xA0) {
+        logo_next_mode();
+        return;
+    }
+    wr8(VDP_PALETTE_DIRTY, rd8(VDP_PALETTE_DIRTY) | 1);
+    if (rd16(LOGO_WALKER_COUNT)) {
+        uint32_t w;
+        for (w = LOGO_WALKERS; w < LOGO_WALKERS + 32 * 8; w += 8) {
+            if ((int16_t)rd16(w) < 0)
+                continue;
+            if ((int16_t)rd16(w + 2) < 0)
+                wr16(w + 2, (uint16_t)(int8_t)rd8(w + 3));
+            else
+                logo_walk(w);
+        }
+        vdp_logo_tiles(LOGO_SHOWN);
+        return;
+    }
+    vdp_logo_tiles(LOGO_BITMAP);
+    if (rd16(0xFFC71C)) {
+        wr16(0xFFC71C, rd16(0xFFC71C) - 1);
+        if (!rd16(0xFFC71C))
+            logo_next_mode();
+        return;
+    }
+    if (!rd16(0xFFC70E)) {
+        /* brighten */
+        uint16_t c = (uint16_t)(rd16(0xFFC714) + 0x111);
+        int16_t steps;
+        int k;
+        for (k = 0; k < 14; k++) {
+            wr16(0xFFD3A4 + 2 * k, c);
+            wr16(0xFFD384 + 2 * k, c);
+        }
+        wr16(0xFFC714, c);
+        steps = (int16_t)(rd16(0xFFC710) - 1);
+        wr16(0xFFC710, (uint16_t)steps);
+        if (steps < 0) {
+            wr16(0xFFC70E, rd16(0xFFC70E) + 1);
+            wr16(LOGO_SWEEP, 7);
+            wr16(LOGO_SWEEP + 2, 0x0A);
+            wr16(0xFFC710, 0x0D);
+        }
+        return;
+    }
+    if (!(rd8(FRAME_COUNTER_BYTE) & 1))
+        return;
+    {
+        /* sweep: four colours per band from a ramp of 8 */
+        int16_t steps = (int16_t)rd16(0xFFC710);
+        int band, k;
+        if ((uint16_t)steps >= 6) {
+            wr16(0xFFD384, rd16(0xFFD384) - 0x111);
+            wr16(0xFFD3A4, rd16(0xFFD3A4) - 0x111);
+        }
+        for (band = 0; band < 2; band++) {
+            int16_t i = (int16_t)(rd16(LOGO_SWEEP + 2 * band) - 1);
+            uint32_t dst = 0xFFD388 + 0x20 * band;
+            wr16(LOGO_SWEEP + 2 * band, (uint16_t)i);
+            for (k = 0; k < 4; k++, dst += 6) {
+                i++;
+                if (i < 0 || i >= 8)
+                    continue;
+                wr32(dst, rd32(0x00814A + 6 * i));
+                wr16(dst + 4, rd16(0x00814A + 6 * i + 4));
+            }
+        }
+        steps--;
+        wr16(0xFFC710, (uint16_t)steps);
+        if (steps < 0)
+            wr16(0xFFC71C, 0x3C);
+    }
+}
+
+void logo_frame_68k(void) { logo_frame(); }
