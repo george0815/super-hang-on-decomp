@@ -2326,3 +2326,40 @@ void race_init_68k(void)
     cpu.d[4] = scroll_d4;
     set_dn(5, 2, scroll_d5);
 }
+
+/* ------------------------------------------------------- original mode */
+
+/* All six parts as new ($7FD8). */
+static void parts_reset(void)
+{
+    int k;
+    for (k = 0; k < 6; k++)
+        wr16(PART_WEAR + 2 * k, 0x0F);
+}
+
+void parts_reset_68k(void) { parts_reset(); }
+
+/*
+ * The rival's split times for this race ($8D7C): a base time per race
+ * with random hundredths for each of six segments (8-byte records at
+ * $FFC85C), and their running total at $FFC83B.
+ */
+#define RIVAL_SPLITS     0xFFC85C
+static void rival_splits(void)
+{
+    uint32_t base = rd32(0x008D58 + 4 * rd16(0xFFC85A)), rec = RIVAL_SPLITS;
+    int k, n;
+    wr32(0xFFC83A, 0);
+    for (k = 0; k < 6; k++, rec += 8) {
+        uint16_t tens;
+        wr32(rec, base);
+        tens = (uint16_t)(((rng_next() & 3) + 3) << 4);
+        wr8(rec + 3, (uint8_t)(rd8(0x008D74 + (rng_next() & 7)) | tens));
+        wr32(rec + 4, 0);
+    }
+    n = rd16(0x00C388 + 2 * rd16(0xFFC85A));
+    for (k = 0; k <= n; k++)
+        time_add(0xFFC83B, 0xFFC85D + 8 * k);
+}
+
+void rival_splits_68k(void) { rival_splits(); }

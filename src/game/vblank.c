@@ -857,6 +857,13 @@ void bcd_digits_68k(void)
     cpu.d[4] = (cpu.d[4] & ~0xffu) | b;
 }
 
+void hud_eight_tiles_68k(void)         /* $C1F6 */
+{
+    write_words(0xFF0582, 8);
+    cpu.d[0] = 0xFFFF;
+    f_logic(2, rd16(0xFF0582 + 14));
+}
+
 void hud_two_tiles_68k(void)           /* $C1EE */
 {
     write_words(0xFF0582, 2);

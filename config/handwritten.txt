@@ -98,3 +98,6 @@
 004D16  pw_cursors_68k
 004D2A  pw_digit_erase_68k
 004E20  pw_letter_erase_68k
+007FD8  parts_reset_68k
+008D7C  rival_splits_68k
+00C1F6  hud_eight_tiles_68k
