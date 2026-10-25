@@ -13,7 +13,7 @@ This lets handwritten replacements be checked on their real interface
 instead of every scratch register the original happened to leave behind.
 """
 
-from m68k import (DN, AN, IND, POSTINC, PREDEC, DISP, INDEX, PCINDEX,
+from m68k import (DN, AN, IND, POSTINC, PREDEC, DISP, INDEX, PCINDEX, IMM,
                   REGLIST, CCR, SR)
 
 X, N, Z, V, C = (1 << 32, 1 << 33, 1 << 34, 1 << 35, 1 << 36)
@@ -123,6 +123,13 @@ def use_def(i):
     elif m == 'move' and ops[0].mode == SR:
         use |= FLAGS
         dst_write(ops[1], 'w')
+    elif m == 'move' and ops[1].mode == PREDEC and ops[1].reg == 7 and ops[0].mode in (DN, AN):
+        # saving a register on the stack (like movem): not a real use
+        use |= areg_bit(7)
+        dfn |= N | Z | V | C
+    elif m == 'move' and ops[0].mode == POSTINC and ops[0].reg == 7 and ops[1].mode == DN:
+        # restoring it: the caller's value comes back, transparent
+        dfn |= N | Z | V | C
     elif m == 'move':
         src(ops[0])
         dst_write(ops[1])
@@ -208,11 +215,19 @@ def use_def(i):
     elif m in ('btst', 'bset', 'bclr', 'bchg'):
         if ops[0].mode == DN:
             use |= dpart(ops[0].reg, 'b')
-        bsz = 'l' if ops[1].mode == DN else 'b'
-        if m == 'btst':
-            src(ops[1], bsz)
+        if ops[1].mode == DN and ops[0].mode == IMM:
+            # a constant bit number touches one part of the register only
+            bit = ops[0].val & 31
+            part = (1 if bit < 8 else 2 if bit < 16 else 4) << (3 * ops[1].reg)
+            use |= part
+            if m != 'btst':
+                dfn |= part
         else:
-            rmw(ops[1], bsz)
+            bsz = 'l' if ops[1].mode == DN else 'b'
+            if m == 'btst':
+                src(ops[1], bsz)
+            else:
+                rmw(ops[1], bsz)
         dfn |= Z
     elif m == 'tas':
         rmw(ops[0], 'b')
@@ -284,6 +299,7 @@ class Flow:
         self.outputs = {f: 0 for f in self.ents}
         self._summaries()
         self._results()
+        self._local_results()
         self.inputs = self.uexp
 
     # ----------------------------------------------------------- helpers
@@ -354,6 +370,16 @@ class Flow:
         if i.flow == 'jmp' and i.target is None:      # tail call
             u, md, _ = self._call_effect(a, i)
             return u | (exit_live & ~md)
+        if i.mnem == 'swap':
+            # the halves trade places: each needs the other only if used
+            n = i.ops[0].reg
+            low, up = dpart(n, 'w'), dpart(n, 'l') & ~dpart(n, 'w')
+            li = after & ~dpart(n, 'l') & ~(N | Z | V | C)
+            if after & low:
+                li |= up
+            if after & up:
+                li |= low
+            return li
         u, d = use_def(i)
         return u | (after & ~d)
 
@@ -452,3 +478,22 @@ class Flow:
         for f in self.ents:
             if f not in reached and f not in self.VECTORS:
                 self.outputs[f] = self.maydef[f]
+
+    def _local_results(self):
+        """local[f]: registers a caller reads after the call before the
+        caller itself returns. The rest of outputs[f] only passes through
+        callers' returns (often into code that reads leftover registers)."""
+        insns = self.dis.insns
+        self.local = {f: 0 for f in self.ents}
+        for f in self.ents:
+            live = self._liveness(f, 0)
+            for a in self.bodies[f]:
+                i = insns[a]
+                if i.flow not in ('bsr', 'jsr'):
+                    continue
+                ts = self._callees(a, i) or []
+                after = live.get(a + i.size, 0)
+                for t in ts:
+                    self.local[t] |= after & self.maydef[t]
+        for f in self.ents:
+            self.local[f] &= self.outputs[f]

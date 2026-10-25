@@ -61,5 +61,6 @@ uint16_t char_tile(uint8_t c);
 
 /* ---------------------------------------------------------- objects.c */
 void obj_add_to_layer(uint32_t obj);
+void objects_update(void);
 
 #endif

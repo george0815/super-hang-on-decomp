@@ -26,3 +26,6 @@
 00F40A  anim_frame_record_68k
 00F864  dma_slot_1_68k
 00F86A  dma_slot_2_68k
+# d4.hi: a false dependency through the HUD digit code ($C176 rotates d4 with
+# rol.l; the old upper half is carried along but never extracted)
+00716E  objects_update_68k  ignore=d4.hi
