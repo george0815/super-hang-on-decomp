@@ -502,3 +502,48 @@ void rect_record_68k(void)
     set_dn(5, 2, 0xFFFF);
     set_sr(get_sr() & 0xF8FF);
 }
+
+/* ------------------------------------------------------------ frame */
+
+/*
+ * One command screen frame after the VBlank ($52AE): objects, then the
+ * open submenu, or the command list: up/down move the cursor (4
+ * commands), C/Start opens one.
+ */
+static void command_frame(void)
+{
+    uint16_t sub, row;
+    uint8_t p;
+    objects_update();
+    sub = rd16(SUBMENU);
+    if (sub) {
+        switch (sub & 0xFC) {
+        case 4: parts_menu(); break;
+        case 8: mechanic_menu(); break;
+        case 12: race_menu(); break;
+        case 16: end_menu(); break;
+        }
+        return;
+    }
+    command_unmasked = 0;
+    command_cursor_blink();
+    p = rd8(PAD1_PRESSED);
+    row = rd16(COMMAND_ROW);
+    if (p & 1) {
+        wr16(COMMAND_ROW, row == 0 ? 3 : row - 1);
+        sound_command(0xA2);
+    } else if (p & 2) {
+        wr16(COMMAND_ROW, row == 3 ? 0 : row + 1);
+        sound_command(0xA2);
+    } else if (p & 0xA0) {
+        wr16(SUBMENU, (uint16_t)((row + 1) * 4));
+        command_cursor();
+        sound_command(0xA2);
+    }
+}
+
+void command_frame_68k(void)
+{
+    command_frame();
+    set_sr(get_sr() & 0xF8FF);
+}

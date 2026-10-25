@@ -174,6 +174,8 @@ static void hblank_handler(void)
 
 void gen_take_irq(int level, uint32_t pc)
 {
+    if (level == 6 && getenv("VERIFY_TAINT_PC"))
+        fprintf(stderr, "vblank at pc %06X\n", pc);
     verify_interrupt(level);
     push32(pc);
     push16(get_sr());

@@ -113,8 +113,11 @@ void verify_interrupt(int level)
         return;
     if (level == 4)
         in_hblank = 1;
-    else
+    else {
+        if (!tainted && getenv("VERIFY_TAINT"))
+            fprintf(stderr, "taint: level %d at icount %llu\n", level, (unsigned long long)m68k_icount);
         tainted = 1;
+    }
 }
 
 void verify_interrupt_end(int level)
@@ -176,7 +179,13 @@ void verify_call(uint32_t addr, const char *name, void (*original)(void),
     nio = iopos = io_overflow = io_mismatch = tainted = in_hblank = 0;
 
     verify_mode = VERIFY_ORIGINAL;
-    original();
+    {
+        uint64_t start = m68k_icount;
+        original();
+        if (getenv("VERIFY_TAINT") && stats[k].all && n < 20)
+            fprintf(stderr, "%s call %ld: %llu instructions%s\n", name, n,
+                    (unsigned long long)(m68k_icount - start), tainted ? " (interrupted)" : "");
+    }
     verify_mode = VERIFY_OFF;
 
     if (tainted || io_overflow) {   /* interrupted: not a pure function of its inputs */
