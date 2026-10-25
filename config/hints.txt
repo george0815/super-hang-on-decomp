@@ -41,3 +41,5 @@ code 00D93A RankingFrame
 code 0086D2 RaceStartFrame
 code 008B58 RaceFrameEnd
 code 0089B6 DemoFrameEnd
+code 008ACC RaceFrame
+code 008976 DemoFrame

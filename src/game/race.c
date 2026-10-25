@@ -2492,3 +2492,84 @@ static void demo_frame_end(void)
 }
 
 void demo_frame_end_68k(void) { demo_frame_end(); }
+
+/* Wait for the frame's fourth tick (the VBlank handler counts them). */
+static void wait_ticks_4(uint32_t pc)
+{
+    while ((int16_t)rd16(0xFFC724) < 4)
+        m68k_idle(pc);
+}
+
+/*
+ * A race frame after the start of frame wait ($8ACC): a mode change
+ * requested during the frame takes effect (fading out first when leaving
+ * to the command screen); otherwise, unless paused, the race logic runs
+ * (or the race stops when the time is up), then the second half after
+ * the fourth tick.
+ */
+static void race_frame(void)
+{
+    uint16_t next = rd16(0xFFC720);
+    if (next) {
+        wr16(GAME_MODE, next);
+        if (next == 0x24) {
+            call68k(f_006DD4);
+            wr16(0xFFC722, 0);
+        }
+        return;
+    }
+    if (!rd16(0xFF08D4)) {
+        crash_start();
+        if (!rd8(CLOCK)) {
+            wr16(OBJECTS_FROZEN, 0xFFFF);
+            wr16(OBJECTS, 0x38);             /* time up */
+        } else {
+            hill_columns();
+            parts_check();
+            flash_colours();
+            race_clock();
+            checkpoint_pass();
+            race_stage();
+            stage_geometry();
+            race_rivals();
+            race_place_objects();
+            race_turns();
+            race_sounds();
+            race_input();
+            race_speed();
+            race_drift();
+            race_build_road();
+            road_hills();
+            road_rows();
+            hud_numbers();
+        }
+    }
+    wait_ticks_4(0x008B50);
+    race_frame_end();
+}
+
+void race_frame_68k(void) { race_frame(); }
+
+/* The demo race: the same logic without input, checkpoints or the HUD
+   ($8976). */
+static void demo_frame(void)
+{
+    hill_columns();
+    flash_colours();
+    race_clock();
+    race_sounds();
+    race_speed();
+    race_drift();
+    stage_geometry();
+    race_build_road();
+    road_hills();
+    road_rows();
+    race_turns();
+    race_place_objects();
+    race_rivals();
+    crash_start();
+    wait_ticks_4(0x0089AE);
+    demo_frame_end();
+}
+
+void demo_frame_68k(void) { demo_frame(); }
