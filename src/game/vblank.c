@@ -20,6 +20,7 @@
 #define GAME_MODE         0xFFC704
 #define VBLANK_PHASE      0xFFC724  /* race VBlanks since the last race frame, x4 */
 #define HUD_HIDDEN        0xFFC82C
+#define FRAME_COUNTER_BYTE 0xFFC726
 #define HUD_TASK          0xFFC8A6  /* step of the HUD setup sequence */
 
 #define DMA_SLOT_1        0xFFC7E0  /* queued transfers: command, source, */
@@ -632,6 +633,48 @@ static void hud_name_entry(void)
     hud_highlight(rd32(0xFFC8AC) - 0x2A0000, 0x23);
 }
 
+/*
+ * Original mode's HUD extras ($BD0C): the elapsed time, a window over the
+ * screen top that grows with the number of broken parts (a warning blinks
+ * while it is negative), and when the count changes, a line per broken
+ * part.
+ */
+static void hud_parts(void)
+{
+    static const struct { uint32_t wear, text; } parts[6] = {
+        { 0xFFB650, 0x00BE8A }, { 0xFFB648, 0x00BEC0 }, { 0xFFB652, 0x00BEF6 },
+        { 0xFFB64E, 0x00BF2C }, { 0xFFB64C, 0x00BF62 }, { 0, 0 },
+    };
+    int16_t broken;
+    uint32_t cmd;
+    int k;
+    if (!rd16(HUD_HIDDEN) || rd16(SOUND_LOCKED))
+        return;
+    vdp_copy(0x511A0003, 0xFFC83E, 8);
+    broken = (int16_t)rd16(0xFFC896);
+    if (broken >= 0) {
+        wr16(VDP_CTRL, 0x9200 | rd8(0x00BD04 + broken));
+        if (!broken)
+            return;
+        vdp_copy(0x52A00003, rd8(FRAME_COUNTER_BYTE) & 2 ? 0x00BE30 : 0x00BE42, 9);
+    } else {
+        vdp_copy(0x52A00003, rd8(FRAME_COUNTER_BYTE) & 8 ? 0x00BE1E : 0x00BE42, 9);
+    }
+    if (!rd16(0xFFC89A))
+        return;
+    wr16(0xFFC89A, 0);
+    cmd = 0x530E0003;
+    if ((int16_t)rd16(0xFFB64A) < 0 && (int16_t)rd16(0xFFB650) >= 0) {
+        vdp_copy(cmd, 0x00BE54, 0x1B);
+        cmd += 0x800000;
+    }
+    for (k = 0; parts[k].wear; k++)
+        if ((int16_t)rd16(parts[k].wear) < 0) {
+            vdp_copy(cmd, parts[k].text, 0x1B);
+            cmd += 0x800000;
+        }
+}
+
 /* HUD setup sequence, one step per VBlank ($DD38). */
 static void hud_tasks(void)
 {
@@ -733,7 +776,7 @@ void vblank_race(void)                 /* $E906 */
         hud_part_5();
         hud_time();
         hud_map_marker();
-        call68k(f_00BD0C);
+        hud_parts();
         hud_tasks();
         break;
     default:
