@@ -60,3 +60,4 @@
 008448  palette_load_68k
 00BB76  hud_map_marker_68k
 008D26  crash_start_68k
+008002  logo_walk_68k
