@@ -947,9 +947,328 @@ static void obj_crash_bike(uint32_t obj)
     obj_add_to_layer(obj);
 }
 
+/* ------------------------------------------------------- player bike */
+
+#define GAME_MODE       0xFFC704
+#define RACE_MODE_COPY  0xFFC794  /* game mode with bit 0 clear */
+#define MODE_RACE       0x14
+#define MODE_FINISHED   0x10
+#define BIKE_PUSH       0xFF065A  /* sideways push left from a bump */
+#define BIKE_STEER      0xFF063A  /* steering target for the lean */
+#define BIKE_OFFROAD    0xFF066A
+#define BIKE_SPEED_CAP  0xFF0642
+
+#define BIKE_TARGET     0x30      /* curve the auto-steer aims for */
+#define BIKE_LAST_CURVE 0x32
+#define BIKE_STEER_VEL  0x36
+#define BIKE_LEAN       0x38
+#define BIKE_SKID       0x3A
+#define BIKE_FRAME_WAIT 0x3C
+#define BIKE_FLAGS      0x2E      /* bit 0: leaning left */
+#define BIKE_SHAKE      0x1C
+#define BIKE_SHAKE_STEP 0x1E
+
+#define ROM_CURVE_LIMIT 0x009F8E
+
+static void clamp_curve(void)                 /* $A4F0 */
+{
+    int16_t c = (int16_t)rd16(ROAD_CURVE), lim = (int16_t)rd16(ROM_CURVE_LIMIT);
+    if (c > lim)
+        wr16(ROAD_CURVE, (uint16_t)lim);
+    else if (c < -lim)
+        wr16(ROAD_CURVE, (uint16_t)-lim);
+}
+
+static void add_curve(int16_t d)
+{
+    wr16(ROAD_CURVE, (uint16_t)((int16_t)rd16(ROAD_CURVE) + d));
+}
+
+/* Tail light flashing faster with speed ($A3AC). */
+static void bike_tail_light(uint32_t obj)
+{
+    uint8_t t = (uint8_t)(rd8(obj + 0x1B) - 1);
+    wr8(obj + 0x1B, t);
+    if (t == 0) {
+        wr8(obj + 0x1B, rd8(obj + 0x19));
+        wr8(obj + 0x18, (uint8_t)~rd8(obj + 0x18));
+    }
+    wr32(0xFFD390, rd8(obj + 0x18) ? 0x00000444 : 0x04440000);
+    wr8(PALETTE_DIRTY, rd8(PALETTE_DIRTY) | 1);
+}
+
+/* A bump's sideways push, decaying by 2 per frame ($A3D6). */
+static void bike_push(void)
+{
+    int16_t push = (int16_t)rd16(BIKE_PUSH), step = (int16_t)(rd16(0x009F94) * 2);
+    if (push == 0)
+        return;
+    if (push < 0) {
+        add_curve((int16_t)-step);
+        push += 2;
+        wr16(BIKE_PUSH, push < 0 ? (uint16_t)push : 0);
+    } else {
+        add_curve(step);
+        push -= 2;
+        wr16(BIKE_PUSH, push >= 0 ? (uint16_t)push : 0);
+    }
+    clamp_curve();
+}
+
+/*
+ * Steering ($A418): the lean follows BIKE_STEER by up to 12 per frame;
+ * the lean (scaled down below speed $80, unless off-road) divided by the
+ * grip value pushes the bike across the road.
+ */
+static void bike_steer(uint32_t obj)
+{
+    int16_t d = (int16_t)(rd16(BIKE_STEER) - rd16(obj + BIKE_LEAN));
+    int32_t force;
+    int16_t grip, q;
+    if (d > 12) d = 12;
+    if (d < -12) d = -12;
+    wr16(obj + BIKE_LEAN, (uint16_t)((int16_t)rd16(obj + BIKE_LEAN) + d));
+    force = (int16_t)rd16(obj + BIKE_LEAN);
+    if (!rd16(BIKE_OFFROAD) && (int16_t)rd16(BIKE_SPEED) <= 0x7F)
+        force = (force * (int16_t)rd16(BIKE_SPEED)) >> 7;
+    force *= 16;
+    grip = (int16_t)rd16(0x009F96);
+    if (rd16(0xFFC8B6) || rd16(HUD_HIDDEN))
+        grip = (int16_t)(grip + rd16(0x00A48C + 2 * rd16(0xFFB622)));
+    q = (int16_t)f_divs((uint16_t)grip, (uint32_t)force);
+    add_curve((int16_t)(-q * 2));
+    clamp_curve();
+}
+
+static void bike_offroad_check(uint32_t obj)  /* $A496 */
+{
+    int16_t c = (int16_t)rd16(ROAD_CURVE);
+    wr16(BIKE_OFFROAD, 0);
+    if ((c < 0 ? -c : c) > 0x12C) {
+        wr16(BIKE_OFFROAD, 0xFFFF);
+        wr16(obj + BIKE_SHAKE, rd16(obj + BIKE_SHAKE) + 1);
+    }
+}
+
+/* Shake on rough ground, otherwise drift back to the centre ($A512). */
+static void bike_shake(uint32_t obj)
+{
+    if (rd16(0xFF06BE))
+        return;
+    if (rd16(obj + BIKE_SHAKE)) {
+        uint16_t r = rng_next(), step;
+        int16_t dx;
+        wr16(obj + BIKE_SHAKE_STEP, rd16(obj + BIKE_SHAKE_STEP) + 1);
+        step = rd16(obj + BIKE_SHAKE_STEP);
+        dx = (int16_t)(r & 1);
+        if (!(step & 2))
+            dx = (int16_t)-dx;
+        wr16(obj + OBJ_SCREEN_X, (uint16_t)(rd16(obj + OBJ_SCREEN_X) + dx));
+        if (step & 1)
+            wr16(obj + OBJ_SCREEN_Y, (uint16_t)(rd16(obj + OBJ_SCREEN_Y) + ((step & 2) ? -1 : 1)));
+        wr16(obj + BIKE_SHAKE, 0);
+        return;
+    }
+    wr16(obj + OBJ_SCREEN_Y, 0x15F);
+    {
+        int16_t x = (int16_t)rd16(obj + OBJ_SCREEN_X);
+        if (x != 0x120)
+            wr16(obj + OBJ_SCREEN_X, (uint16_t)(x + (x < 0x120 ? 1 : -1)));
+    }
+}
+
+/* Skid frames push the bike sideways ($A4B8). */
+static void bike_skid(uint32_t obj)
+{
+    int16_t skid = (int16_t)rd16(obj + BIKE_SKID), d;
+    if (skid <= 0x0E)
+        return;
+    d = (int16_t)rd16(0x009F92);
+    if (skid == 0x1E || skid == 0x1A || skid == 0x16)
+        d += 0x0C;
+    if (rd8(obj + BIKE_FLAGS) & 1)
+        d = (int16_t)-d;
+    add_curve((int16_t)(d * 2));
+    clamp_curve();
+}
+
+/* Course-driven steering target and steering velocity (race mode). */
+static void bike_auto_steer(uint32_t obj)
+{
+    int16_t target, diff, mag, delta, dir = 0;
+    uint16_t turn = rd16(0xFF0676), next = rd16(0xFF067E);
+
+    if ((int16_t)turn > 1)
+        target = turn == 3 ? 0xB4 : -0xB4;
+    else if (turn == 1)
+        target = next == 2 ? 0xB4 : -0xB4;
+    else
+        target = next == 3 ? 0xB4 : next == 2 ? -0xB4 : 0;
+    wr16(obj + BIKE_TARGET, (uint16_t)target);
+
+    diff = (int16_t)(target - rd16(ROAD_CURVE));
+    mag = diff < 0 ? (int16_t)-diff : diff;
+    if (mag > 6)
+        mag = 6;
+    if (diff >= 0) {
+        delta = (int16_t)(rd16(ROAD_CURVE) - rd16(obj + BIKE_LAST_CURVE));
+        if (!(delta == 0 && mag == 0) && !rd16(BIKE_OFFROAD))
+            dir = delta < 1 ? -1 : delta > 1 ? 1 : 0;
+    } else {
+        delta = (int16_t)(rd16(obj + BIKE_LAST_CURVE) - rd16(ROAD_CURVE));
+        if (!(delta == 0 && mag == 0))
+            dir = delta < 1 ? 1 : delta > 1 ? -1 : 0;
+    }
+    if (dir) {
+        int16_t v = (int16_t)(dir * (mag + 1) * 2 + (int16_t)rd16(obj + BIKE_STEER_VEL));
+        if (v > 0x7F) v = 0x7F;
+        if (v < -0x7F) v = -0x7F;
+        wr16(obj + BIKE_STEER_VEL, (uint16_t)v);
+    }
+    wr16(obj + BIKE_LAST_CURVE, rd16(ROAD_CURVE));
+    wr16(BIKE_STEER, rd16(obj + BIKE_STEER_VEL));
+
+    wr16(BIKE_SPEED_CAP, 0);
+    if (rd8(0xFF068E)) {
+        wr8(0xFF068E, 0);
+        wr16(BIKE_SPEED_CAP, rd16(0x009FFE));
+    }
+    if (rd16(BIKE_OFFROAD))
+        wr16(BIKE_SPEED_CAP, rd16(0x009FFE));
+
+    if (rd16(0xFF067A)) {
+        uint16_t n = rd16(obj + 0x20) + 1;
+        wr16(obj + 0x20, n);
+        if (n == 1) {
+            int16_t t = (int16_t)(0x96 - rd16(0xFF067A));
+            if (t >= 0)
+                wr16(obj + 0x22, (uint16_t)t);
+        } else if ((int16_t)rd16(obj + 0x22) > 0) {
+            if ((int16_t)rd16(obj + 0x22) <= 0x0A || (rd8(obj + 0x23) & 8))
+                wr16(BIKE_SPEED_CAP, rd16(0x009FFC));
+            wr16(obj + 0x22, rd16(obj + 0x22) - 2);
+        }
+    } else {
+        wr16(obj + 0x20, 0);
+    }
+    wr16(0xFF063E, 0x7F);
+}
+
+/* The player's bike ($710E). */
+static void obj_player_bike(uint32_t obj)
+{
+    uint16_t mode;
+    int16_t lean;
+    int frame;
+
+    if (rd16(OBJECTS_FROZEN) | rd16(0xFFC89E)) {
+        obj_add_to_layer(obj);
+        return;
+    }
+    mode = rd16(GAME_MODE) & ~1;
+    wr16(RACE_MODE_COPY, mode);
+    if (mode == MODE_FINISHED) {
+        /* blink a few times, then stay */
+        uint8_t t = (uint8_t)(rd8(obj + 0x34) - 1);
+        wr8(obj + 0x34, t);
+        if (t == 0) {
+            wr8(obj + 0x34, 6);
+            wr8(obj + 0x35, rd8(obj + 0x35) + 1);
+        }
+        if ((int8_t)rd8(obj + 0x35) > 0x0A || !(rd8(obj + 0x35) & 1))
+            obj_add_to_layer(obj);
+        return;
+    }
+    if (rd16(0xFFC7FE))
+        wr16(0xFFC7FE, rd16(0xFFC7FE) - 1);
+    if (rd16(0xFF06BE)) {
+        wr32(BIKE_SPEED, 0);
+        wr16(obj + OBJ_HANDLER, 0x54);
+        return;
+    }
+    if (rd16(HUD_HIDDEN) && (int16_t)rd16(BIKE_SPEED) >= 0xB4) {
+        if (!rd16(0xFFB64A)) {
+            wr16(0xFFB64A, 0xFFFF);
+            wr16(0xFFC894, rd16(0xFFC894) + 1);
+            wr16(0xFF0656, rd16(0xFF0656) + 1);
+        }
+        if (!rd16(0xFFB650)) {
+            wr16(0xFFB64A, 0xFFFF);
+            wr16(0xFFB650, rd16(0xFFB650) - 1);
+            wr16(0xFFC894, rd16(0xFFC894) + 1);
+            wr16(0xFF0656, rd16(0xFF0656) + 1);
+        }
+    }
+    if (mode == MODE_RACE)
+        bike_auto_steer(obj);
+
+    /* at low course progress the steering is damped */
+    if ((!rd16(0xFF060A) || mode == MODE_RACE) && (int16_t)rd16(0xFF0616) < 0x20) {
+        uint32_t v = (uint32_t)(int32_t)(int16_t)rd16(BIKE_STEER);
+        v >>= (uint16_t)(0x20 - rd16(0xFF0616)) >> 2;
+        wr16(BIKE_STEER, (uint16_t)v);
+    }
+
+    /* lean -> frame */
+    lean = (int16_t)rd16(obj + BIKE_LEAN);
+    if (lean < 0) {
+        wr8(obj + BIKE_FLAGS, rd8(obj + BIKE_FLAGS) | 1);
+        lean = (int16_t)-lean;
+    } else {
+        wr8(obj + BIKE_FLAGS, rd8(obj + BIKE_FLAGS) & ~1);
+    }
+    for (frame = 0; lean > (int16_t)rd16(0x00A932 + 2 * frame); frame++)
+        ;
+    if (rd16(0xFF0626) && rd8(0xFF0628) == 3 &&
+        (int16_t)(rd16(0x009F7E) - 0x14) <= (int16_t)rd16(BIKE_SPEED))
+        wr16(obj + BIKE_SKID, 0x20);
+    if (rd16(obj + BIKE_SKID)) {
+        wr16(obj + BIKE_SKID, rd16(obj + BIKE_SKID) - 2);
+        frame = 3;
+    } else if (rd16(BIKE_PUSH)) {
+        wr16(obj + BIKE_SHAKE, rd16(obj + BIKE_SHAKE) + 1);
+        wr8(obj + BIKE_FLAGS, rd8(obj + BIKE_FLAGS) & ~1);
+        frame = 2;
+        if ((int16_t)rd16(BIKE_PUSH) < 0)
+            wr8(obj + BIKE_FLAGS, rd8(obj + BIKE_FLAGS) | 1);
+    } else {
+        wr8(0xFF0628, (uint8_t)frame);
+        if (rd16(0xFF06BE))
+            frame = 0;
+    }
+    frame *= 4;
+    if (rd8(obj + BIKE_FLAGS) & 1)
+        frame = -frame;
+    {
+        int update = 1;
+        if (mode == MODE_RACE) {
+            int16_t w = (int16_t)(rd16(obj + BIKE_FRAME_WAIT) - 1);
+            wr16(obj + BIKE_FRAME_WAIT, (uint16_t)w);
+            if (w >= 0)
+                update = 0;
+            else
+                wr16(obj + BIKE_FRAME_WAIT, 4);
+        }
+        if (update) {
+            wr16(obj + OBJ_SPRITE_MAP, rd16(0x00A946 + frame));
+            wr8(obj + OBJ_SPRITE_SET, rd8(0x00A948 + frame));
+        }
+    }
+    wr8(obj + 0x19, (uint8_t)-(((int16_t)rd16(BIKE_SPEED) >> 7) - 3));
+
+    bike_tail_light(obj);
+    bike_push();
+    bike_steer(obj);
+    bike_offroad_check(obj);
+    bike_shake(obj);
+    bike_skid(obj);
+    obj_add_to_layer(obj);
+}
+
 /* Handlers by index; NULL ones still run recompiled. */
 static void (*const handlers[25])(uint32_t obj) = {
     [(0x710A - 0x710A) / 4] = obj_debris,
+    [(0x710E - 0x710A) / 4] = obj_player_bike,
     [(0x7112 - 0x710A) / 4] = obj_bike_overlay,
     [(0x7116 - 0x710A) / 4] = obj_bike_overlay_2,
     [(0x711A - 0x710A) / 4] = obj_rider,
