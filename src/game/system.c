@@ -67,3 +67,18 @@ uint8_t bcd_addx(uint8_t a, uint8_t b, int *x)
         r -= 0xa0;
     return (uint8_t)r;
 }
+
+/* sbcd with X in and out: a - b - X. */
+uint8_t bcd_subx(uint8_t a, uint8_t b, int *x)
+{
+    unsigned lo = (a & 0x0f) - (b & 0x0f) - (unsigned)*x;
+    unsigned adj = lo > 0x0f ? 6 : 0;
+    unsigned r = lo + (a & 0xf0) - (b & 0xf0);
+    if (r > 0xff) {
+        r += 0xa0;
+        *x = 1;
+    } else {
+        *x = r < adj;
+    }
+    return (uint8_t)(r - adj);
+}

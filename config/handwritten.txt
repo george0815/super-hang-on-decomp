@@ -101,3 +101,4 @@
 007FD8  parts_reset_68k
 008D7C  rival_splits_68k
 00C1F6  hud_eight_tiles_68k
+0052CC  mechanic_menu_68k

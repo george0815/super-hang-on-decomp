@@ -70,6 +70,7 @@ uint16_t rng_next(void);
 uint8_t bcd_add(uint8_t a, uint8_t b);
 uint8_t bcd_sub(uint8_t a, uint8_t b);
 uint8_t bcd_addx(uint8_t a, uint8_t b, int *x);
+uint8_t bcd_subx(uint8_t a, uint8_t b, int *x);
 
 /* ------------------------------------------------------------ audio.c */
 void sound_command(uint8_t command);
