@@ -57,6 +57,7 @@ void obj_add_to_layer_68k(void)
 #define OBJ_ROAD_LINE   0x28    /* word: scanline of that distance */
 #define OBJ_LANE        0x2A    /* word: lateral offset on the road */
 
+#define HUD_HIDDEN      0xFFC82C
 #define ROAD_Y_LINES    0xFF0F00  /* per scanline: road height x16 */
 #define ROAD_X_LINES    0xFF0D00  /* per scanline: road centre x64 */
 #define BIKE_SPEED      0xFF064A
@@ -119,7 +120,145 @@ static void obj_project_lane(uint32_t obj)
     wr16(obj + OBJ_SCREEN_X, (uint16_t)(centre + offset + 0x120));
 }
 
+/* Y += VY; screen y = Y + $F0 ($70D0) */
+static void obj_move_y(uint32_t obj)
+{
+    wr32(obj + OBJ_Y, rd32(obj + OBJ_Y) + rd32(obj + OBJ_VY));
+    wr16(obj + OBJ_SCREEN_Y, rd16(obj + OBJ_Y) + 0xF0);
+}
+
+/* Z += VZ ($70E6) */
+static void obj_move_z(uint32_t obj)
+{
+    wr32(obj + OBJ_Z, rd32(obj + OBJ_Z) + rd32(obj + OBJ_VZ));
+}
+
+/*
+ * Pick the sprite map for the object's depth ($7060, $704C with another
+ * depth table): the sprite set (byte $2D) selects a 20-byte row of map
+ * addresses in ROM_SPRITE_SETS; a per-depth table gives the offset in it.
+ */
+#define OBJ_SPRITE_SET   0x2D
+#define ROM_SPRITE_SETS  0x000204
+static void obj_pick_sprite(uint32_t obj, uint32_t depth_table)
+{
+    int16_t depth = (int16_t)rd16(obj + OBJ_Z);
+    uint32_t row;
+    if (depth == 0 || depth > 0xC0)
+        return;
+    row = ROM_SPRITE_SETS + rd8(obj + OBJ_SPRITE_SET) * 20u;
+    wr16(obj + OBJ_SPRITE_MAP, rd16(row + (int8_t)rd8(depth_table + depth)));
+}
+
+#define ROM_DEPTH_SPRITES_NEAR 0x006EC8
+#define ROM_DEPTH_SPRITES_FAR  0x006F8A
+
 /* ----------------------------------------------------------- handlers */
+
+/*
+ * Thrown/falling piece ($710A): moves on all three axes with gravity on X,
+ * stops at depth $B8, and at depth $1C signals the race code.
+ */
+static void obj_debris(uint32_t obj)
+{
+    uint16_t depth;
+    obj_pick_sprite(obj, ROM_DEPTH_SPRITES_NEAR);
+    obj_add_to_layer(obj);
+    depth = rd16(obj + OBJ_Z);
+    if (depth == 0x1C) {
+        obj_move_z(obj);
+        wr16(0xFFC712, 0);
+        wr16(0xFFC714, 0x18);
+        wr8(0xFFC72C, rd8(0xFFC72C) + 4);
+        return;
+    }
+    if (depth == 0xB8) {
+        obj_move_z(obj);
+        wr32(obj + OBJ_VX, 0);
+        wr32(obj + OBJ_VY, 0);
+        wr32(obj + OBJ_VZ, 0);
+        return;
+    }
+    obj_move_x(obj);
+    obj_move_y(obj);
+    obj_move_z(obj);
+    if (rd16(obj + OBJ_Z) != 0xBC)
+        wr32(obj + OBJ_VX, rd32(obj + OBJ_VX) + 0xFFFF5000u);
+}
+
+#define PLAYER          0xFFC940  /* object 1: the player's bike */
+#define OBJ_ANIM        0x3E
+
+/* No overlays while any of these race states is set. */
+static int overlays_suppressed(void)
+{
+    return (rd16(0xFFC7FE) | rd16(0xFF0666) | rd16(0xFF06BC)) != 0;
+}
+
+/*
+ * Overlay that follows the bike's frame ($7112): picks a sprite and the
+ * tile source for its DMA slot from the bike's lean frame.
+ */
+static void obj_bike_overlay(uint32_t obj)
+{
+    uint16_t frame;
+    if (rd16(0xFFC794) == 0x10 || overlays_suppressed())
+        return;
+    if ((int16_t)rd16(0xFF0642) < (int16_t)rd16(0x009FFA))
+        return;
+    if (rd16(HUD_HIDDEN)) {
+        int16_t c = (int16_t)rd16(0xFFB64C);
+        if (c < 0)
+            return;
+        if (c == 0)
+            wr16(0xFFB64C, 0xFFFF);
+    }
+    wr16(obj + OBJ_SCREEN_X, rd16(PLAYER + OBJ_SCREEN_X));
+    wr16(obj + OBJ_SCREEN_Y, rd16(PLAYER + OBJ_SCREEN_Y));
+    frame = (uint16_t)(rd8(PLAYER + OBJ_SPRITE_SET) << 3);
+    if (frame != rd16(obj + OBJ_ANIM)) {
+        wr16(obj + OBJ_ANIM, frame);
+        wr32(0xFFC7A6, rd32(0x00A6DC + frame));
+        wr32(0xFFC7AA, rd32(0x00A6E0 + frame));
+    }
+    wr16(obj + OBJ_SPRITE_MAP, rd16(0x00A6E2 + frame));
+    obj_add_to_layer(obj);
+}
+
+/*
+ * Second bike overlay ($7116), alternating between two frames every 8
+ * updates; also drives a countdown used when the HUD is hidden.
+ */
+static void obj_bike_overlay_2(uint32_t obj)
+{
+    uint16_t i;
+    if (!rd8(0xFF0510)) {
+        wr16(obj + 0x36, 0x0B);
+        return;
+    }
+    if (overlays_suppressed() || rd16(0xFFC97A))
+        return;
+    if (!rd16(OBJECTS_FROZEN)) {
+        if (rd16(HUD_HIDDEN) && !rd16(0xFFB64E)) {
+            int16_t t = (int16_t)(rd16(obj + 0x36) - 1);
+            wr16(obj + 0x36, (uint16_t)t);
+            if (t < 0) {
+                wr16(0xFFB64E, rd16(0xFFB64E) - 1);
+                wr16(0xFFC8A2, 4);
+                wr16(0xFFC8A4, 0x31);
+                wr16(0xFFC8A0, 1);
+            }
+        }
+        wr16(obj + OBJ_ANIM, rd16(obj + OBJ_ANIM) + 8);
+    }
+    i = (uint16_t)((rd16(obj + OBJ_ANIM) & 8) + (rd8(PLAYER + OBJ_SPRITE_SET) << 4));
+    wr16(obj + OBJ_SPRITE_MAP, rd16(0x00A5F6 + i));
+    wr32(0xFFC7AE, rd32(0x00A5F0 + i));
+    wr32(0xFFC7B2, rd32(0x00A5F4 + i));
+    wr16(obj + OBJ_SCREEN_X, rd16(PLAYER + OBJ_SCREEN_X));
+    wr16(obj + OBJ_SCREEN_Y, rd16(PLAYER + OBJ_SCREEN_Y));
+    obj_add_to_layer(obj);
+}
 
 /* Snaps its velocity to zero on four fixed columns ($7152). */
 static void obj_column_stopper(uint32_t obj)
@@ -185,6 +324,9 @@ static void obj_approacher(uint32_t obj)
 
 /* Handlers by index; NULL ones still run recompiled. */
 static void (*const handlers[25])(uint32_t obj) = {
+    [(0x710A - 0x710A) / 4] = obj_debris,
+    [(0x7112 - 0x710A) / 4] = obj_bike_overlay,
+    [(0x7116 - 0x710A) / 4] = obj_bike_overlay_2,
     [(0x7132 - 0x710A) / 4] = obj_approacher,
     [(0x711E - 0x710A) / 4] = obj_blinker,
     [(0x714A - 0x710A) / 4] = obj_line_marker,
