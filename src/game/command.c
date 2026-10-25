@@ -290,3 +290,159 @@ static void parts_menu(void)
 }
 
 void parts_menu_68k(void) { parts_menu(); }
+
+/* -------------------------------------------------------------- race */
+
+#define RIVAL            0xFFB606   /* 0-6: the rival raced against */
+#define RIVAL_TEXT       0xFFB608   /* 3: beaten, ready to move up */
+#define SPONSOR          0xFFB610
+#define RACES            0xFFB644
+#define WINS             0xFFB646
+
+/* Rival and sponsor names ($60AC). */
+static void race_names(void)
+{
+    uint32_t names = mechanic_text_table(0x0157F4, 0x015C24);
+    rect(0x50A80003, 0x015566, 20, 2);
+    rect_record(rd32(names + 4 * rd16(RIVAL)));
+    rect(0x5A120003, 0x015566, 20, 2);
+    rect_record(rd32(names + 0x38 + 4 * rd16(SPONSOR)));
+}
+
+/* The rival's panel and words ($567C). */
+static void rival_panel(void)
+{
+    vdp_copy(0x509A0003, 0x014294, 5);
+    command_unmasked = 1;
+    window_columns(0x61260003, 0x12);
+    rect(0x51A80003, 0x015566, 20, 4);
+    rect_record(rd32(mechanic_text_table(0x010AB6, 0x010FA6) + 4 * rd16(RIVAL) +
+                     32 * rd16(RIVAL_TEXT)));
+}
+
+static void race_start(void)
+{
+    wr16(0xFFC82C, 0xFFFF);
+    wr16(0xFFC8B6, 0);
+    wr16(0xFFC85A, rd16(RIVAL));
+    wr16(0xFFC722, 0);
+    wr16(0xFFC704, 0x0C);          /* music select, then the race */
+}
+
+/* Portraits sliding in or out: rival at $FFCE00 on, sponsor at $FFCEC0
+   on (handler $4C). */
+static void portrait(uint32_t obj, int16_t x, uint16_t y, uint16_t map)
+{
+    wr16(obj, 0x4C);
+    wr16(obj + 4, (uint16_t)x);
+    wr16(obj + 0x14, y);
+    wr16(obj + 0x24, map);
+}
+
+static void results_clear(void)
+{
+    wr16(WINS, 0);
+    wr16(RACES, 0);
+}
+
+/* Beaten 5 times: the next rival and sponsor slide in ($58B2); after the
+   last one the game is over. */
+static void rival_next(void)
+{
+    rect(0x54B80003, 0x015566, 11, 11);
+    if (rd16(RIVAL) == 6) {
+        call68k(f_006DD4);           /* fade out (waits for VBlanks) */
+        wr16(0xFFC722, 0);
+        wr16(0xFFC704, 0);
+        return;
+    }
+    wr16(RIVAL, rd16(RIVAL) + 1);
+    wr16(SPONSOR, rd16(SPONSOR) + 1);
+    results_clear();
+    portrait(0xFFCE80, -0x20, 0xB8, rd16(0x005FF2 + 2 * rd16(RIVAL)));
+    wr16(0xFFCE40 + 0x18, 1);
+    portrait(0xFFCF40, -0x78, 0x150, rd16(0x00601C + 2 * rd16(SPONSOR)));
+    wr16(0xFFCF00 + 0x18, 1);
+    wr16(0xFFB612, 0);
+    end_open();
+    wr16(RIVAL_TEXT, 0);
+    rival_panel();
+    race_names();
+}
+
+/* Lost 5 times: back to the previous rival ($5976). */
+static void rival_previous(void)
+{
+    if (rd16(RIVAL)) {
+        wr16(RIVAL, rd16(RIVAL) - 1);
+        wr16(SPONSOR, rd16(SPONSOR) - 1);
+        portrait(0xFFCE00, 0, 0xB8, rd16(0x005FF2 + 2 * rd16(RIVAL)));
+        wr16(0xFFCE00 + 0x18, 0xFFFF);
+        portrait(0xFFCEC0, -0x58, 0x150, rd16(0x00601C + 2 * rd16(SPONSOR)));
+        wr16(0xFFCEC0 + 0x18, 0xFFFF);
+        race_names();
+    }
+    results_clear();
+    wr16(0xFFB612, 0);
+    end_open();
+    wr16(RIVAL_TEXT, 0);
+    rect(0x54B80003, 0x015566, 11, 11);
+}
+
+/*
+ * Entering the race submenu ($5700): after 5 wins the rival is beaten
+ * (and beating the last one gives everything: best mechanic, all
+ * upgrades, new parts, $99999999, and the password); after 5 losses
+ * the previous rival comes back; otherwise straight to the race.
+ */
+static void race_open(void)
+{
+    static const uint16_t levels[6] = { 5, 5, 4, 3, 3, 4 };
+    int k;
+    if (rd16(WINS) == 5) {
+        wr16(0xFFB612, 4);
+        end_open();
+        wr16(RIVAL_TEXT, 3);
+        if (rd16(RIVAL) != 6 || rd16(WINS) != 5)
+            return;
+        wr16(MECHANIC_BEST, 6);
+        for (k = 0; k < 6; k++)
+            wr16(0xFFB618 + 2 * k, levels[k]);
+        for (k = 0; k < 6; k++)
+            wr16(0xFFB648 + 2 * k, 0x0F);
+        wr32(MONEY, 0x99999999);
+        vdp_copy(0x5B120003, 0x00613E, 8);
+        password_show();
+        return;
+    }
+    if ((uint16_t)(rd16(RACES) - rd16(WINS)) == 5) {
+        rival_previous();
+        return;
+    }
+    race_start();
+}
+
+/* The race submenu, one frame ($5636). */
+static void race_menu(void)
+{
+    command_unmasked = 0;
+    if (!(rd8(SUBMENU + 1) & 1)) {
+        wr8(SUBMENU + 1, rd8(SUBMENU + 1) | 1);
+        race_open();
+        rival_panel();
+        return;
+    }
+    if (!(rd8(PAD1_PRESSED) & 0xA0))
+        return;
+    if (rd16(RIVAL_TEXT) == 3)
+        rival_next();
+    else
+        race_start();
+}
+
+void race_menu_68k(void)
+{
+    race_menu();
+    if (command_unmasked)
+        set_sr(get_sr() & 0xF8FF);
+}
