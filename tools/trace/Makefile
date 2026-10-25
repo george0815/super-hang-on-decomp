@@ -16,7 +16,7 @@ gpgx_trace: gpgx_trace.c $(OBJS)
 all: gpgx_trace gpgx_fncap
 
 clean:
-	rm -rf gpgx_trace gpgx_fncap $(HOOKDIR)
+	rm -rf gpgx_trace gpgx_fncap gpgx_play $(HOOKDIR)
 
 # Variant with the CPU hook compiled in, for per-function capture
 HOOKDIR  := obj_hook
@@ -54,3 +54,7 @@ gpgx_fncap: gpgx_fncap.c $(HOOKOBJS) $(BASEOBJS)
 PORTSND := ../../src/sound/ym2612.c ../../src/sound/psg.c
 ymcmp: ymcmp.c $(PORTSND) $(OBJDIR)/ym2612.o
 	$(CC) -O2 -std=c99 -D_DEFAULT_SOURCE -I../../src/runtime -o $@ ymcmp.c $(PORTSND) $(OBJDIR)/ym2612.o -lm
+
+# Interactive play window that records the pad input as a script
+gpgx_play: gpgx_play.c $(OBJS)
+	$(CC) $(CFLAGS) $(shell pkg-config --cflags sdl3) -o $@ $^ $(shell pkg-config --libs sdl3) -lm -lz

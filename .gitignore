@@ -15,6 +15,7 @@ docs/*.pdf
 tools/bin/
 tools/trace/gpgx_trace
 tools/trace/gpgx_fncap
+tools/trace/gpgx_play
 tools/trace/obj_hook/
 tools/trace/ymcmp
 compile_commands.json
