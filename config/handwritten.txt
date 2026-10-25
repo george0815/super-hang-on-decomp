@@ -141,3 +141,4 @@
 005FD2  picture_frame_68k
 005622  rect_record_68k
 0088F4  hud_curtain_68k
+0074A0  title_frame_68k

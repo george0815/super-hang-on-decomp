@@ -234,3 +234,82 @@ static void course_select_colours(void)
 }
 
 void course_select_colours_68k(void) { course_select_colours(); }
+
+/* ------------------------------------------------------------ frame */
+
+#define PAD1_HELD        0xFFC706
+
+/* Any menu activity keeps the demo away for at least 2 seconds ($77F4). */
+static void demo_delay(void)
+{
+    if (rd16(0xFFC82A) < 0x78)
+        wr16(0xFFC82A, 0x78);
+}
+
+static void next_mode(uint16_t mode)
+{
+    wr16(0xFFC722, 0);
+    wr16(0xFFC704, mode);
+}
+
+static void (*const title_steps[10])(void) = {
+    title_launch, title_launch, title_launch, title_launch, title_launch,
+    title_launch, title_launch, title_wipe, title_flash, title_wait,
+};
+
+/*
+ * One title screen frame after the VBlank ($74A0). First menu: new game
+ * or password (A held with Start: mode $30); second menu: arcade or
+ * original mode. Then the colour cycling, the cursor, and the intro
+ * steps with the objects once the start delay is over.
+ */
+static void title_frame(void)
+{
+    uint8_t p = rd8(PAD1_PRESSED), m = rd8(MENU_STATE);
+    if (!(m & 2)) {
+        if (p & 3) {
+            demo_delay();
+            wr8(MENU_STATE, m ^ 1);
+        } else if (p & 0xA0) {
+            if (rd8(PAD1_HELD) & 0x40) {
+                next_mode(0x30);
+                return;
+            }
+            demo_delay();
+            if (m & 1) {
+                next_mode(0x2C);               /* password */
+                return;
+            }
+            wr8(MENU_STATE, m | 2);
+            vdp_copy(0x579A0003, 0x007A8C, 13);
+            vdp_copy(0x589A0003, 0x007A72, 13);
+            return;
+        }
+    } else {
+        if (p & 3) {
+            demo_delay();
+            wr8(MENU_STATE, m ^ 4);
+        } else if (p & 0xA0) {
+            int k;
+            if (!(m & 4)) {
+                next_mode(0x08);               /* arcade */
+                return;
+            }
+            for (k = 0; k < 0x200; k += 4)     /* original mode: new save */
+                wr32(MENU_STATE + k, 0);
+            for (k = 0; k < 6; k++)
+                wr16(0xFFB648 + 2 * k, 0x0F);
+            next_mode(0x24);
+            return;
+        }
+    }
+    title_cycle();
+    title_cursor();
+    wr16(0xFFC71C, rd16(0xFFC71C) - 1);
+    if ((int16_t)rd16(0xFFC71C) >= 0)
+        return;
+    title_steps[rd8(TITLE_STEP) / 4]();
+    objects_update();
+}
+
+void title_frame_68k(void) { title_frame(); }

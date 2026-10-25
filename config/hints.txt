@@ -27,3 +27,6 @@ jtbl 00F08C 4
 ; HBlank handler, copied to RAM $FF05D2 at $6D8E (level-4 vector points there)
 code 006DA6 HBlankRAM
 alias 006DA6 FF05D2
+; game mode loops: the code after the frame's VBlank wait, as its own
+; function so it can be handwritten and verified
+code 0074A0 TitleFrame
