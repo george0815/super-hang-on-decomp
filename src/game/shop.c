@@ -189,3 +189,95 @@ void part_piece_blink_68k(void)
 void part_label_normal_68k(void) { part_label_normal(); unmask(); label_regs(); }
 void part_label_blink_68k(void) { part_label_blink(); unmask(); label_regs(); }
 void part_blink_68k(void) { part_blink(); unmask(); label_regs(); }
+
+/* ------------------------------------------------------------ frame */
+
+#define PAD1_PRESSED     0xFFC707
+#define MONEY            0xFFB638
+#define ROM_PART_PRICES  0x015622   /* per part 8 BCD longs, by level */
+
+static void part_select(int16_t d)
+{
+    int16_t part = (int16_t)(rd16(PART) + d);
+    part_piece_hide();
+    part_label_normal();
+    if (part > 5) part = 0;
+    if (part < 0) part = 5;
+    wr16(PART, (uint16_t)part);
+    mechanic_comment();
+    sound_command(0xA2);
+}
+
+/* Show another level of the selected part. */
+static void part_level(int16_t d)
+{
+    uint16_t part = rd16(PART), level;
+    static const uint16_t levels[6] = { 6, 6, 5, 4, 4, 5 };
+    int16_t l = (int16_t)(rd16(PART_LEVELS + 2 * part) + d);
+    if (l < 0 || l == (int16_t)levels[part])
+        return;
+    level = (uint16_t)l;
+    wr16(PART_LEVELS + 2 * part, level);
+    if (level == rd16(PART_OWNED + 2 * part))
+        part_box_selected();
+    else
+        part_box_normal(part);
+    part_name(part, level);
+    sound_command(0xA2);
+}
+
+/* Buy the level shown, if the money is enough: fitted new. */
+static void part_buy(void)
+{
+    uint16_t part = rd16(PART), level = rd16(PART_LEVELS + 2 * part), k;
+    uint32_t price = ROM_PART_PRICES + 32u * part + 4u * level;
+    int x = 0;
+    if (rd32(price) > rd32(MONEY)) {
+        sound_command(0xA3);
+        return;
+    }
+    for (k = 4; k-- > 0;)
+        wr8(MONEY + k, bcd_subx(rd8(MONEY + k), rd8(price + k), &x));
+    wr32(VDP_CTRL, 0x5CA00003);
+    hex_tiles(0xFF0582, rd32(MONEY), 8, 0xE0, 0);
+    for (k = 0; k < 8; k++)
+        wr16(VDP_DATA, rd16(0xFF0582 + 2 * k));
+    wr16(PART_WEAR + 2 * part, 0x0F);
+    mechanic_comment();
+    sound_command(0xA4);
+    wr16(PART_OWNED + 2 * part, level);
+    part_box_selected();
+}
+
+/*
+ * One parts screen frame after the VBlank ($615C): objects, the blinking
+ * selection; up/down pick a part, left/right its level, C/Start buys,
+ * B goes back to the command screen.
+ */
+static void shop_frame(void)
+{
+    uint8_t p;
+    objects_update();
+    part_blink();
+    p = rd8(PAD1_PRESSED);
+    if (p & 1)
+        part_select(-1);
+    else if (p & 2)
+        part_select(1);
+    else if (p & 4)
+        part_level(-1);
+    else if (p & 8)
+        part_level(1);
+    else if (p & 0xA0)
+        part_buy();
+    else if (p & 0x10) {
+        wr16(0xFFC722, 0);
+        wr16(0xFFC704, 0x24);
+    }
+}
+
+void shop_frame_68k(void)
+{
+    shop_frame();
+    set_sr(get_sr() & 0xF8FF);
+}
