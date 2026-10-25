@@ -50,3 +50,6 @@
 00EFA8  road_rows_68k
 009626  race_clock_68k
 00E5BA  checkpoint_pass_68k
+00F066  road_hills_68k
+00BBFC  hud_numbers_68k
+00EB86  scroll_tables_68k

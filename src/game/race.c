@@ -1770,13 +1770,21 @@ static void tiles_to_sprites(uint32_t src, uint32_t sprite, const int *pick, int
         wr16(sprite + 6 * k, rd16(src + 2 * pick[k]));
 }
 
-/* All eight hex digits of DIGIT_VALUE as tiles ($C184). */
-static void digits_long(uint32_t dst, uint16_t base)
+/*
+ * The low n hex digits of a value as name table entries, base << 8 plus
+ * the digit, plus $614 once shown: leading zeros stay blank unless shown
+ * is set, the last digit always shows ($C16C/$C176/$C180/$C184).
+ */
+static void hex_tiles(uint32_t dst, uint32_t v, int n, uint16_t base, int shown)
 {
-    uint32_t v = rd32(DIGIT_VALUE);
     int k;
-    for (k = 0; k < 8; k++)
-        wr16(dst + 2 * k, (uint16_t)((v >> (28 - 4 * k) & 0xF) + (base << 8) + 0x614));
+    base = (uint16_t)(base << 8);
+    for (k = 0; k < n; k++) {
+        uint16_t digit = v >> (4 * (n - 1 - k)) & 0xF;
+        if (digit || k == n - 1)
+            shown = 1;
+        wr16(dst + 2 * k, (uint16_t)(digit + base + (shown ? 0x614 : 0)));
+    }
 }
 
 /* An arcade segment time (BCD seconds, hundredths) as digits ($BFEE):
@@ -1789,7 +1797,7 @@ static void segment_digits(uint32_t time)
         v = (v - 0x60) | 0x1000;
     v = (v << 12 & 0xFFFFFF00u) | rd8(time + 1);
     wr32(DIGIT_VALUE, v);
-    digits_long(DIGIT_BUFFER, 0xA0);
+    hex_tiles(DIGIT_BUFFER, rd32(DIGIT_VALUE), 8, 0xA0, 1);
 }
 
 /* Show the time of the checkpoint just passed ($E808). */
@@ -1853,4 +1861,334 @@ void checkpoint_pass_68k(void)
     checkpoint_pass();
     if (checkpoint_d4_set)
         cpu.d[4] = rd32(DIGIT_VALUE);
+}
+
+/* -------------------------------------------------------------- hills */
+
+/*
+ * The road's vertical profile ($F066). A hill comes from a script picked
+ * by HILL_START (ROM_HILL_SCRIPTS: 2D vectors like the track geometry, 4
+ * words per step). The state byte at +4 of the road scratch goes idle ->
+ * start -> running; while running, the script is walked from the current
+ * position exactly like the road builder walks the track, giving a height
+ * per scanline at $FF1100 (96 lines, doubled to 192), and a horizon limit
+ * for the line marker at +$24. A zero step ends the hill.
+ */
+#define HILL_START       0xFF061E   /* hill number to start (0 = none) */
+#define ROM_HILL_SCRIPTS 0x00FAD2
+#define ROAD_HEIGHTS     0xFF1100
+static uint16_t hills_d1;
+static int hills_ran;
+
+static void hills_end(void)
+{
+    uint16_t hill = rd16(HILL_START);
+    wr16(HILL_START, 0);
+    if (hill == rd16(0xFF060E))
+        wr16(0xFF0606, 0);
+    wr8(ROAD_SCRATCH + 4, 0);
+    hills_d1 = 0;
+}
+
+static void hills_run(void)
+{
+    const uint32_t sc = ROAD_SCRATCH;
+    uint32_t script, p;
+    int16_t vx, vy, dirx, diry, prev_h = 0, prev_line = 0, d0, d1, d4;
+    uint16_t len;
+    int32_t px = 0, py = 0;
+    int seg, out = 0xBE;
+
+    wr16(sc + 6, (uint16_t)(((int16_t)rd16(sc + 8) >> 1) * 4));
+    script = rd32(sc + 0x0C);
+    p = script + (int16_t)rd16(sc + 6);
+    vx = (int16_t)(rd16(p) + rd16(p + 4));
+    vy = (int16_t)(rd16(p + 2) + rd16(p + 6));
+    wr16(sc + 0x38, (uint16_t)vx);
+    wr16(sc + 0x48, (uint16_t)vy);
+    len = isqrt_hex((uint32_t)((int32_t)vx * vx + (int32_t)vy * vy));
+    dirx = (int16_t)divs_q((int32_t)vx << 14, len);
+    diry = (int16_t)divs_q((int32_t)vy << 14, len);
+    wr16(sc + 0x58, (uint16_t)dirx);
+    wr16(sc + 0x68, (uint16_t)diry);
+    wr32(sc + 0x78, 0);
+    wr32(sc + 0x88, 0);
+    wr16(sc + 0x98, 0);
+    wr16(sc + 0xA8, 0);
+
+    for (seg = 0x20; seg >= 0; seg--, p += 4) {
+        int16_t x, y, h, line, span;
+        int32_t fwd;
+        int16_t a = (int16_t)rd16(p), b = (int16_t)rd16(p + 2);
+        px += a + (int16_t)rd16(p + 4);
+        py += b + (int16_t)rd16(p + 6);
+        wr32(sc + 0x78, (uint32_t)px);
+        wr32(sc + 0x88, (uint32_t)py);
+        if (!(a | b)) {
+            hills_end();
+            return;
+        }
+        x = (int16_t)(px >> 5);
+        y = (int16_t)(py >> 5);
+        fwd = ((int32_t)x * dirx + (int32_t)y * diry) >> 7;
+        h = (int16_t)divs_q((int32_t)x * diry - (int32_t)y * dirx, (uint16_t)((fwd >> 7) + 0x300));
+        line = (int16_t)rd16(ROM_SEGMENT_LINES + 2 * seg);
+        wr16(sc + 0xB8, (uint16_t)h);
+        wr16(sc + 0xC8, (uint16_t)line);
+        span = (int16_t)(line - prev_line);
+        if (span < 0)
+            break;
+        if (span == 0)
+            continue;
+        {
+            int16_t step = (int16_t)divs_q((int16_t)(h - prev_h), (uint16_t)span);
+            int16_t v = prev_h, l = prev_line;
+            do {
+                v = (int16_t)(v + step);
+                l++;
+                wr16(ROAD_HEIGHTS + out, (uint16_t)v);
+                out -= 2;
+                if (out < 0)
+                    goto done;
+            } while (l != line);
+        }
+        prev_h = h;
+        prev_line = line;
+        wr16(sc + 0x98, (uint16_t)h);
+        wr16(sc + 0xA8, (uint16_t)line);
+    }
+done:
+    /* horizon: the slope of the step under the bike, limited by the road */
+    p = script + (int16_t)rd16(sc + 6);
+    d0 = (int16_t)(2 * (rd16(p) + rd16(p + 4)));
+    d1 = (int16_t)(2 * (rd16(p + 2) + rd16(p + 6)));
+    d4 = 0;
+    if ((d0 < 0 ? -d0 : d0) > (d1 < 0 ? -d1 : d1)) {
+        int16_t t = d0;
+        d4 = d0 < 0 ? -0x70 : 0x70;
+        d0 = d1;
+        d1 = t;
+    }
+    d0 = (int16_t)divs_q((int32_t)d0 * 56, (uint16_t)d1);
+    if (d4)
+        d0 = (int16_t)(d4 - d0);
+    d0 = (int16_t)-d0;
+    d1 = (int16_t)(((int16_t)rd16(ROAD_Y_LINES) >> 4) - 0x5F);
+    if (d0 > d1)
+        d0 = d1;
+    wr16(sc + 0x24, (uint16_t)d0);
+    wr32(sc + 8, rd32(sc + 8) + rd32(0xFF0646));
+    /* 96 lines -> 192 by inserting midpoints, from the bottom up */
+    {
+        uint32_t src = ROAD_HEIGHTS + 0xBE, dst = 0xFF1280;
+        int k;
+        for (k = 0; k < 0x5F; k++) {
+            int16_t a = (int16_t)rd16(src), b;
+            dst -= 2;
+            wr16(dst, (uint16_t)a);
+            src -= 2;
+            b = (int16_t)rd16(src);
+            a = (int16_t)(a + ((int16_t)(b - a) >> 1));
+            dst -= 2;
+            wr16(dst, (uint16_t)a);
+        }
+        {
+            int16_t b = (int16_t)rd16(src + 2), d = (int16_t)((int16_t)(rd16(src) - b) >> 1);
+            hills_d1 = (uint16_t)d;
+            wr16(src + 2, (uint16_t)(b + d));
+        }
+    }
+}
+
+static void road_hills(void)
+{
+    const uint32_t sc = ROAD_SCRATCH;
+    hills_ran = 0;
+    if (rd16(0xFFC8A8))
+        return;
+    switch (rd8(sc + 4) & 3) {
+    case 0:
+        if (rd16(HILL_START))
+            wr8(sc + 4, 1);
+        break;
+    case 1:
+        wr32(sc + 0x0C, rd32(ROM_HILL_SCRIPTS + (uint16_t)((rd16(HILL_START) - 1) * 4)));
+        wr32(sc + 8, 0);
+        wr16(sc + 6, 0);
+        wr8(sc + 4, 2);
+        break;
+    case 2:
+        hills_ran = 1;
+        hills_run();
+        break;
+    }
+}
+
+void road_hills_68k(void)
+{
+    road_hills();
+    if (hills_ran) {
+        set_dn(1, 2, hills_d1);
+        cpu.d[4] &= 0xffff;
+    }
+}
+
+/* ---------------------------------------------------------------- HUD */
+
+/*
+ * HUD numbers for the VBlank code to draw ($BBFC): speed in km/h (BCD at
+ * $FF055A; its digits flash past 240 unless the bike can't go that fast),
+ * then either original mode's time or the arcade stage number, course
+ * name tiles, score and top score.
+ */
+#define SPEED_KMH        0xFF055A
+static uint32_t hud_d4_in;
+static void hud_numbers(void)
+{
+    uint16_t base = 0xE0;
+    wr16(SPEED_KMH, (uint16_t)bin_to_bcd((uint16_t)(rd16(BIKE_SPEED) * 0x117u / 0xF0)));
+    if (!((rd16(0xFFC8B6) || rd16(HUD_HIDDEN)) && rd16(0xFFB61A) < 3) &&
+        (int16_t)rd16(BIKE_SPEED) >= 0xF0) {
+        base = 0x80;
+        if (!rd8(0xFF0510) && !(rd8(FRAME_COUNTER_BYTE) & 8))
+            base = 0xE0;
+    }
+    hex_tiles(0xFFC78C, rd16(SPEED_KMH), 4, base, 0);
+    if (rd16(HUD_HIDDEN)) {
+        time_tiles(0xFFC82F, 0xFFC83E);
+        return;
+    }
+    copy_words(0xFFC778, 0x00C338 + 16 * rd16(COURSE), 8);
+    hex_tiles(0xFFC788, rd8(CHECKPOINT_BCD + 1), 2, 0xE0, 0);
+    hex_tiles(0xFFC758, rd32(0xFF0550), 8, 0x80, 0);
+    hex_tiles(0xFFC768, rd32(0xFF054C), 8, 0xC0, 0);
+}
+
+void hud_numbers_68k(void)
+{
+    hud_d4_in = cpu.d[4];
+    hud_numbers();
+    if (rd16(HUD_HIDDEN)) {
+        cpu.d[1] = 0xFFFF0000u | (uint16_t)((rd8(0xFFC831) & 0xF) + 0xA614);
+        cpu.d[4] = (hud_d4_in & 0xFFFF0000u) | rd16(SPEED_KMH);
+    } else {
+        cpu.d[1] = 0xFFFFFFFF;
+        cpu.d[4] = rd32(0xFF054C);
+    }
+    cpu.x = 0;
+}
+
+/* ------------------------------------------------------------- scroll */
+
+/*
+ * Per-line scroll tables for the HBlank code ($EB86), written into the
+ * half of the double buffers not being shown (SCROLL_BUFFER_SEL ^ $700):
+ *  - background: the heading, followed smoothly (16.16 at $FF0578), gives
+ *    the far (BG_SCROLL) and near (3/4 of it) background scroll;
+ *  - for every screen row the road covers (ROAD_ROW_LINES), the vertical
+ *    scroll (+ the stripe offset when the row's road line is in a light
+ *    stripe of the ROM pattern for the current phase) and the horizontal
+ *    scroll from the road centre; rows above the road get the background.
+ * The H-scroll longs keep the upper word of the smoothing step in their
+ * first half, as the original's register does.
+ */
+#define BG_SCROLL        0xFF0570   /* word far, word near */
+#define BG_HEADING       0xFF0578   /* 16.16 heading being followed */
+#define SCROLL_BUFFER_SEL 0xFF0580
+#define SCROLL_FLIP      0xFF06C4
+#define VSCROLL_LINES    0xFF1500
+#define HSCROLL_LINES    0xFF1880
+#define ROM_STRIPES      0x00FE6E   /* 32 patterns of 96 bytes */
+static uint16_t scroll_d1, scroll_d4, scroll_d5;
+static void scroll_tables(void)
+{
+    uint32_t delta, vs, hs, half;
+    uint16_t bg, d4 = 0, d5 = 0, blank_rows, count;
+    uint32_t stripes, vrow;
+    int row;
+    int16_t top;
+
+    delta = (uint32_t)((int32_t)(((uint32_t)(uint16_t)(rd16(ROAD_HEADING) << 5) << 16) - (rd32(BG_HEADING) << 6)) >> 7);
+    wr32(BG_HEADING, rd32(BG_HEADING) + delta);
+    bg = (uint16_t)((rd16(0xFFC74C) - (uint16_t)(rd16(BG_HEADING) - 8)) & 0x7FF);
+    wr16(BG_SCROLL, bg);
+    wr16(0xFFC74A, bg);
+    wr16(BG_SCROLL + 2, (uint16_t)((int16_t)(bg * 3) >> 2));
+
+    stripes = ROM_STRIPES + (rd16(0xFF0662) & 0x1F) * 96;
+    half = rd16(SCROLL_BUFFER_SEL) ^ 0x700;
+    hs = HSCROLL_LINES + half;
+    vs = VSCROLL_LINES + half;
+    vrow = 0;                          /* upper word: minus the row */
+    for (row = 0; row < 0xE0; row++, d5++, vrow -= 0x10000, hs += 4, vs += 4) {
+        uint16_t line = rd16(ROAD_ROW_LINES + 2 * row), v;
+        if (!line) {
+            d4++;
+            continue;
+        }
+        line >>= 1;
+        v = (uint16_t)(0x140 - d5 + line);
+        if (rd8(stripes + (line >> 1)))
+            v = (uint16_t)(v - 0xC0);
+        vrow = (vrow & 0xFFFF0000u) | v;
+        wr32(vs, vrow);
+        wr32(hs, (delta & 0xFFFF0000u) |
+                 (uint16_t)(((int16_t)rd16(ROAD_CENTRE_LINES + 2 * line) >> 6) - 100));
+    }
+    /* rows above the road: background */
+    blank_rows = d4;
+    d4--;
+    {
+        uint32_t c;
+        for (c = 0, hs = HSCROLL_LINES + half; c <= d4; c++, hs += 4)
+            wr32(hs, (uint32_t)rd16(BG_SCROLL) << 16 | rd16(BG_SCROLL + 2));
+    }
+    vs = VSCROLL_LINES + half;
+    top = (int16_t)rd16(ROAD_ROWS_BLANK);
+    if (top < 0) {
+        uint16_t lead = (uint8_t)-top, v = 0;
+        d4 = (uint16_t)(d4 - lead - 1);
+        for (count = 0; count <= lead; count++, v--)
+            wr32(vs + 4 * count, v);
+        vs += 4u * (lead + 1);
+        d5 = 0xFFFF;
+        if ((int16_t)d4 >= 0) {
+            for (count = 0; count <= d4; count++)
+                wr32(vs + 4 * count, (uint32_t)rd16(BG_SCROLL) << 16 | (uint16_t)(top - 1));
+            d4 = 0xFFFF;
+        }
+    } else {
+        uint32_t c;
+        for (c = 0; c <= d4; c++)
+            wr32(vs + 4 * c, (uint32_t)rd16(BG_SCROLL) << 16 | (uint16_t)(top - 1));
+        d4 = 0xFFFF;
+    }
+    /* first halves of the top rows: minus the row, then held */
+    {
+        uint16_t lines = (uint16_t)(0x80 - rd16(ROAD_ROWS_BLANK) - 0x28), v = 0;
+        int below = lines < blank_rows;
+        uint32_t c, a = VSCROLL_LINES + half;
+        if (!below)
+            lines = (uint16_t)(blank_rows - 1);
+        for (c = 0; c <= lines; c++, a += 4, v--)
+            wr16(a, v);
+        if (below) {
+            int16_t rest = (int16_t)(blank_rows - lines - 2);
+            for (; rest >= 0; rest--, a += 4)
+                wr16(a, v);
+        }
+        scroll_d1 = v;
+    }
+    wr32(VSCROLL_LINES + (rd16(SCROLL_BUFFER_SEL) ^ 0x700), 0);
+    wr8(SCROLL_FLIP, 0xFF);
+    scroll_d4 = d4;
+    scroll_d5 = d5;
+}
+
+void scroll_tables_68k(void)
+{
+    scroll_tables();
+    cpu.d[1] = scroll_d1;
+    cpu.d[4] = scroll_d4;
+    set_dn(5, 2, scroll_d5);
 }
