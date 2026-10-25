@@ -2226,3 +2226,120 @@ static void crash_start(void)
 }
 
 void crash_start_68k(void) { crash_start(); }
+
+/* ---------------------------------------------------------- race start */
+
+static void clear_words(const uint32_t *addr, int n)
+{
+    int k;
+    for (k = 0; k < n; k++)
+        wr16(addr[k], 0);
+}
+
+/*
+ * Reset everything for a new race ($F448): counters and flags, the clock
+ * (time from the difficulty's first entry, 30 frames a second), segment
+ * records, checkpoints, the course's top score, the bike and course
+ * state, the road tables (flat), and both scroll buffers.
+ */
+static void race_init(void)
+{
+    static const uint32_t flags[] = {
+        0xFFC80A, 0xFFC80C, 0xFFC818, 0xFFC7CC, 0xFFC7DC, 0xFFC79C, 0xFFC7A4, 0xFFC7AC,
+        0xFFC7B4, 0xFFC7BC, 0xFFC708, 0xFFC720, 0xFFC756, 0xFFC89E, 0xFFC7F8, 0xFF0658,
+        0xFFC806, 0xFFC88E, 0xFFC894, 0xFFC896, 0xFFC898, 0xFFC89A, 0xFFC8A0, 0xFFC8A2,
+        0xFFC8A4, 0xFFC8A6, 0xFFC8A8, 0xFFC8AA, 0xFFC8B4,
+    };
+    static const uint32_t state1[] = {
+        0xFF068A, 0xFFC748,
+    };
+    static const uint32_t state2[] = {
+        0xFF0622, 0xFF0614, 0xFF060A, 0xFF0612, 0xFF061E,
+    };
+    static const uint32_t state3[] = {
+        0xFF0606, 0xFF061A, 0xFFC74A, 0xFFC74C, 0xFF0578, 0xFF0754,
+    };
+    static const uint32_t state4[] = {
+        0xFF064E, 0xFF0652, 0xFF0656, 0xFF065A, 0xFF0666, 0xFF066A,
+    };
+    static const uint32_t state5[] = {
+        0xFF0692, 0xFF06B4, 0xFF06B6, 0xFF06B8, 0xFF06BC, 0xFF06BE, 0xFF062E, 0xFF0630,
+        0xFF06C0,
+    };
+    int k;
+
+    wr32(0xFFC80E, 0x10000);
+    wr16(0xFFC812, 0xB4);
+    wr32(0xFFC7BE, 0xFFFF0000);
+    wr32(0xFFC7C2, 0);
+    wr8(0xFFC7C6, 0);
+    wr8(0xFFC7C7, 3);
+    wr32(0xFFC73E, 0);
+    wr16(0xFFC742, 0);
+    wr16(0xFFC7FE, 2);
+    clear_words(flags, sizeof flags / sizeof flags[0]);
+    for (k = 0; k < 12; k++)
+        wr16(HILL_HEIGHTS + 2 * k, 0);
+    for (k = 0; k < 0xF0; k++)
+        wr16(0xFF094A + 2 * k, 0);
+    wr8(0xFF06C5, 0);
+    wr16(0xFF0610, 0xFFFF);
+    wr8(0xFF05A0, 0x0F);
+    /* the clock */
+    wr8(CLOCK, rd8(ROM_EXTEND_TIME + 18 * rd16(0xFF053A)));
+    wr8(CLOCK + 1, 0x1E);
+    wr8(CLOCK + 2, 0x1E);
+    wr8(0xFFC88C, 0x1E);
+    wr16(SEGMENT_TIME, 0);
+    wr32(RUN_TOTAL, 0);
+    /* segment records ($E688) */
+    for (k = 0; k < 0x3C; k++)
+        wr16(SEGMENT_RECORDS + 2 * k, 0);
+    wr16(SEGMENT_TIME, 0);
+    wr8(0xFF0557, 0);
+    wr32(0xFF054C, 0);
+    wr16(CHECKPOINT, 1);
+    wr16(CHECKPOINT_BCD, 1);
+    wr32(0xFF0550, rd32(0xFF0200 + rd16(COURSE) * 0x70));
+    /* bike and course */
+    clear_words(state1, 2);
+    wr32(BIKE_SPEED, 0);
+    wr32(COURSE_PROGRESS, 0);
+    wr32(0xFF0530, 0);
+    clear_words(state2, 5);
+    wr8(0xFF0734, 0);
+    wr8(0xFF0744, 0);
+    clear_words(state3, 6);
+    if (!rd16(HUD_HIDDEN))
+        wr32(RNG_SEED, 0);
+    clear_words(state4, 6);
+    wr8(0xFF0510, 0);
+    clear_words(state5, 9);
+    wr8(0xFF051A, 0);
+    wr8(0xFF0519, 0);
+    wr16(FADE_ACTIVE, 0);
+    /* flat road */
+    for (k = 0; k < 0x200; k += 4) {
+        wr32(ROAD_CENTRE_LINES + k, 0);
+        wr32(ROAD_HEIGHTS + k, 0);
+        wr32(ROAD_BEND_LINES + k, 0);
+    }
+    for (k = 0; k < 0xC0; k++)
+        wr16(ROAD_Y_LINES + 2 * k, (uint16_t)(0x5F8 - 8 * k));
+    for (k = 0; k < 0x100; k += 4)
+        wr32(ROAD_ROW_LINES + k, 0);
+    for (k = 0; k < 0x60; k++)
+        wr16(ROAD_ROW_LINES + 0x100 + 2 * k, (uint16_t)(1 + 4 * k));
+    scroll_tables();
+    wr16(SCROLL_BUFFER_SEL, rd16(SCROLL_BUFFER_SEL) ^ 0x700);
+    scroll_tables();
+}
+
+void race_init_68k(void)
+{
+    race_init();
+    set_dn(0, 2, 0xFFFF);
+    cpu.d[1] = scroll_d1;
+    cpu.d[4] = scroll_d4;
+    set_dn(5, 2, scroll_d5);
+}

@@ -292,6 +292,48 @@ static void vram_clear_steps(void)
 }
 
 /*
+ * Load a stage's graphics ($F330): the previous animation frame's four
+ * pieces by DMA, the road side tiles, and the background map, unpacked
+ * and written twice (palette lines 0 and 1).
+ */
+static void dma_copy_regs(uint32_t src);
+void nemesis_to_vdp_68k(void);
+
+static void stage_graphics_load(void)
+{
+    uint16_t stage = rd16(ANIM_ROW);
+    uint32_t rec;
+    int k;
+    wr16(ANIM_ROW, stage - 1);
+    dma_copy(0x69800002, rd32(anim_frame_record()), 0x200);
+    rec = anim_frame_record() + 8;
+    dma_copy(rd32(rec), rd32(rec + 6), rd16(rec + 4));
+    dma_copy(0x6D800002, rd32(anim_frame_record() + 4), 0x200);
+    rec = anim_frame_record() + 0x12;
+    dma_copy(rd32(rec), rd32(rec + 6), rd16(rec + 4));
+    dma_copy_regs(rd32(rec + 6));
+    wr16(VRAM_CLEAR_STEP, 0xFFFF);
+    wr16(ANIM_ROW, stage);
+    wr32(VDP_CTRL, 0x71800002);
+    cpu.a[0] = 0x018000;
+    nemesis_to_vdp_68k();
+    map_unpack(0x018372);
+    for (k = 0; k < 0x3FC; k++)
+        wr16(0xFFE100 + 2 * k, rd16(0xFFF2F8 + 2 * k));
+    wr32(VDP_CTRL, 0x68000003);
+    vdp_map_rows(0);
+    vdp_map_rows(0x2000);
+}
+
+void stage_graphics_load_68k(void)
+{
+    stage_graphics_load();
+    set_dn(0, 2, rd16(0xFFEB14 + 24 * 0xAA - 0x2A - 2) + 0x2000);
+    set_dn(1, 2, 2);
+    set_dn(5, 2, 0xFFFF);
+}
+
+/*
  * Pending tile writes ($EB16): 12 records of $18 bytes. Each has a count,
  * a VRAM address and up to 10 name table entries. Every entry is written
  * twice: at the address, and $C00 bytes further with the next palette line

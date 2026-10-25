@@ -68,3 +68,5 @@
 0077C6  title_cycle_68k
 007806  title_cursor_68k
 007FAA  vram_copy16_68k
+00F330  stage_graphics_load_68k
+00F448  race_init_68k
