@@ -92,3 +92,5 @@
 007E4E  music_blink_3_68k
 007E2E  music_draw_68k
 007F2E  music_graphics_68k
+005358  command_cursor_68k
+005350  command_cursor_blink_68k
