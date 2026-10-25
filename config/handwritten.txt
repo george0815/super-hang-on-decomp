@@ -95,3 +95,6 @@
 005358  command_cursor_68k
 005350  command_cursor_blink_68k
 008C58  race_objects_setup_68k
+004D16  pw_cursors_68k
+004D2A  pw_digit_erase_68k
+004E20  pw_letter_erase_68k
