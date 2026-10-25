@@ -1393,7 +1393,7 @@ void parts_check_68k(void)
  */
 #define ROM_STAGE_GEOMETRY 0x00FA6E
 static uint16_t geometry_d0, geometry_d1;
-static void stage_geometry(void)
+void stage_geometry(void)
 {
     if (!rd16(0xFF0610))
         return;
@@ -2390,3 +2390,35 @@ static void stage_start(void)
 }
 
 void stage_start_68k(void) { stage_start(); }
+
+/* ----------------------------------------------------------- race start */
+
+/*
+ * One race start frame after the wait ($86D2): the HUD curtain, sound,
+ * input, rivals and objects run; once the curtain is open the start
+ * lights object runs, and when it has counted down the music starts and
+ * the race begins (mode $18).
+ */
+static void race_start_frame(void)
+{
+    hud_curtain();
+    race_sounds();
+    race_input();
+    stage_geometry();
+    race_turns();
+    race_rivals();
+    objects_update();
+    hud_numbers();
+    if (rd8(0xFFC755))
+        return;
+    if (!rd16(0xFFCBC0))
+        wr16(0xFFCBC0, 0x30);
+    if (rd8(0xFFCBC0 + 0x2D) != 3)
+        return;
+    if (!rd16(OBJECTS))
+        wr16(OBJECTS, 0x1C);
+    sound_command(rd8(0xFF0518));
+    wr16(0xFFC704, 0x18);
+}
+
+void race_start_frame_68k(void) { race_start_frame(); }

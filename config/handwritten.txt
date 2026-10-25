@@ -150,3 +150,4 @@
 007250  logo_frame_68k
 006826  options_frame_68k
 00D93A  ranking_frame_68k
+0086D2  race_start_frame_68k

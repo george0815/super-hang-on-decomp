@@ -38,3 +38,4 @@ code 004962 PasswordFrame
 code 007250 LogoFrame
 code 006826 OptionsFrame
 code 00D93A RankingFrame
+code 0086D2 RaceStartFrame

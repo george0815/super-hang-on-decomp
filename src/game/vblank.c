@@ -626,7 +626,7 @@ static void hud_draw_all(void)
  * striped pattern; when done, the window plane is reset and the HUD drawn.
  */
 static int curtain_done;
-static void hud_curtain(void)
+void hud_curtain(void)
 {
     uint32_t pattern = 0x008958;
     int16_t step;
