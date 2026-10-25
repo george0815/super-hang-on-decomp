@@ -446,3 +446,31 @@ void race_menu_68k(void)
     if (command_unmasked)
         set_sr(get_sr() & 0xF8FF);
 }
+
+/* ------------------------------------------------ 68000 interfaces */
+
+void window_columns_68k(void)
+{
+    uint32_t cmd = cpu.d[7];
+    int steps = (uint16_t)cpu.d[4] + 1;
+    window_columns(cmd, steps);
+    cmd += 0x20000u * steps + 0x3000000;
+    cpu.d[7] = cmd;
+    f_add(4, 0x800000, cmd - 0x800000);
+    set_dn(4, 2, 0xFFFF);
+}
+
+void race_names_68k(void)
+{
+    command_unmasked = 0;
+    race_names();
+    set_sr(get_sr() & 0xF8FF);
+}
+
+void password_check_68k(void)
+{
+    uint8_t hi, lo;
+    password_check(&hi, &lo);
+    set_dn(1, 1, hi);
+    set_dn(2, 1, lo);
+}

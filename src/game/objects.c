@@ -87,6 +87,26 @@ static void obj_free(uint32_t obj)
         wr32(obj + i, 0);
 }
 
+void obj_free_68k(void)
+{
+    obj_free(cpu.a[0]);
+    cpu.a[0] += OBJ_SIZE;
+    cpu.d[1] = 0;
+    set_dn(0, 2, 0xFFFF);
+}
+
+/* Clear every object ($70FC). */
+void objects_clear_68k(void)
+{
+    int k;
+    for (k = 0; k < OBJ_COUNT; k++)
+        obj_free(OBJECTS + k * OBJ_SIZE);
+    cpu.a[0] = OBJECTS + OBJ_COUNT * OBJ_SIZE;
+    cpu.d[1] = 0;
+    set_dn(0, 2, 0xFFFF);
+    set_dn(2, 2, 0xFFFF);
+}
+
 /* Screen y of a road scanline: the road table holds heights x16. */
 static uint16_t road_screen_y(uint16_t line, uint16_t base)
 {

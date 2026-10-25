@@ -128,3 +128,24 @@ static void pw_regs(void)
 void pw_cursors_68k(void) { pw_cursors(); pw_regs(); }
 void pw_digit_erase_68k(void) { pw_digit_erase(); pw_regs(); cpu.d[0] = pw_d0; cpu.d[1] = pw_d1; }
 void pw_letter_erase_68k(void) { pw_letter_erase(); pw_regs(); cpu.x = 0; }
+
+/* A row of 14 characters from codes, each followed by a blank ($4C96;
+   the same as the password row on the command screen). */
+static void pw_row(uint32_t cmd, uint32_t codes)
+{
+    int k;
+    wr32(VDP_CTRL, cmd);
+    for (k = 0; k < 14; k++) {
+        uint8_t c = rd8(codes + k);
+        wr16(VDP_DATA, (uint16_t)(c + 0x614 + rd16(0x005224 + 2 * c)));
+        wr16(VDP_DATA, 0);
+    }
+}
+
+void pw_row_68k(void)
+{
+    pw_row(cpu.d[7], cpu.a[6]);
+    cpu.a[6] += 14;
+    pw_regs();
+    cpu.x = 0;
+}

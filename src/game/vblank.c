@@ -485,19 +485,144 @@ static void bcd_digits(uint32_t dst, uint8_t bcd, uint16_t base)
 }
 
 /* Draw two tall digits (2x2 entries each) for a BCD byte ($C1B0). */
-static void hud_big_digits(uint32_t command, uint32_t bcd_addr)
+static uint16_t big_digit_index;   /* for the adapter */
+static void hud_big_digits_base(uint32_t command, uint32_t bcd_addr, uint16_t base)
 {
     const uint32_t buf = 0xFF0582;
     int k;
-    bcd_digits(buf, rd8(bcd_addr), 0);
+    bcd_digits(buf, rd8(bcd_addr), base);
     for (k = 0; k < 2; k++) {
         uint16_t d = rd16(buf + 2 * k), i = 0;
         if (d)
             i = (uint16_t)((d - 0x613) << 2);
+        big_digit_index = i;
         wr16(buf + 2 * k, rd16(ROM_DIGIT_TILES + i));
         wr16(buf + 4 + 2 * k, rd16(ROM_DIGIT_TILES + i + 2));
     }
     vdp_copy_rect(command, buf, 2, 2);
+}
+
+static void hud_big_digits(uint32_t command, uint32_t bcd_addr)
+{
+    hud_big_digits_base(command, bcd_addr, 0);
+}
+
+void hud_big_digits_68k(void)          /* $C1B0 */
+{
+    hud_big_digits_base(cpu.d[7], cpu.a[1], (uint16_t)cpu.d[0]);
+    set_dn(0, 2, big_digit_index);
+    cpu.d[5] = 0xFFFF;
+}
+
+/* Eight digits, all shown ($C184). */
+void hex_tiles_shown_68k(void)
+{
+    hex_tiles(cpu.a[0], rd32(cpu.a[1]), 8, (uint16_t)cpu.d[0], 1);
+    cpu.a[0] += 16;
+    cpu.d[1] = 0xFFFFFFFF;
+    cpu.d[4] = rd32(cpu.a[1]);
+}
+
+/*
+ * A menu countdown ($7ADC): every 60 frames the BCD count at $FFC71A
+ * goes down and is shown in big digits; at zero $FFC718 is set.
+ */
+static void menu_countdown(void)
+{
+    wr8(0xFFC71B, rd8(0xFFC71B) - 1);
+    if (rd8(0xFFC71B))
+        return;
+    wr8(0xFFC718, rd16(0xFFC71A) ? 0 : 0xFF);
+    if (!rd16(0xFFC71A))
+        return;
+    wr8(0xFFC71B, 0x3C);
+    wr8(0xFFC71A, bcd_sub(rd8(0xFFC71A), 1));
+    hud_big_digits(0x5A260003, 0xFFC71A);
+}
+
+void menu_countdown_68k(void) { menu_countdown(); }
+
+static void hud_time(void);
+
+/*
+ * Draw the whole race HUD ($BA9A): its frame pieces, then (unless in the
+ * demo) every number, and the course progress bar, as long as the
+ * course (or original mode race) has segments.
+ */
+static void hud_draw_all(void)
+{
+    uint32_t rec;
+    int n, k;
+    uint16_t len;
+    if (rd16(HUD_HIDDEN)) {
+        rec = 0x00C224;
+        n = 3;
+    } else {
+        rec = 0x00C248;
+        n = rd8(SOUND_LOCKED) ? 3 : 6;
+    }
+    for (k = 0; k < n; k++, rec += 12)
+        vdp_copy_rect(rd32(rec), rd32(rec + 8), rd16(rec + 4) + 1, rd16(rec + 6) + 1);
+    if (rd8(SOUND_LOCKED))
+        return;
+    hud_numbers();
+    hud_part_12();
+    hud_part_3();
+    hud_part_4();
+    hud_part_5();
+    hud_time();
+    if (rd16(HUD_HIDDEN)) {
+        wr32(VDP_CTRL, 0x52040003);
+        wr16(VDP_DATA, 0xA630);
+        len = rd16(0x00C388 + 2 * rd16(0xFFC85A));
+        for (k = 0; k <= len; k++) {
+            wr32(VDP_DATA, 0xC6BFC6C3);
+            wr32(VDP_DATA, 0xC6C3C6C3);
+        }
+    } else {
+        wr32(VDP_CTRL, 0x53020003);
+        wr16(VDP_DATA, 0xA630);
+        len = rd16(0x00C378 + 4 * rd16(0xFF060C) + 2);
+        for (k = 0; k <= len; k++)
+            wr32(VDP_DATA, 0xC6BFC6C3);
+    }
+    wr16(VDP_DATA, 0xA624);
+    hud_map_marker();
+}
+
+void hud_draw_all_68k(void)
+{
+    hud_draw_all();
+    set_dn(5, 2, 0xFFFF);
+}
+
+/*
+ * Graphics for the current course and stage ($8BFA): a list of DMA
+ * transfers (length in words, VRAM address, source; ended by 0), then
+ * the bike's tiles and the rider frames.
+ */
+static void dma_copy_regs(uint32_t src);
+static uint32_t course_dma_src;   /* last source, for the adapter */
+static void course_graphics(void)
+{
+    uint32_t list = rd32(0x008ED4 + (uint16_t)(rd16(0xFF060C) * 72 + rd16(0xFF060A) * 8));
+    uint16_t words;
+    course_dma_src = 0;
+    while ((words = rd16(list)) != 0) {
+        course_dma_src = rd32(list + 4);
+        dma_copy(vram_write_command(rd16(list + 2)), course_dma_src, words);
+        list += 8;
+    }
+    wr32(VDP_CTRL, 0x40000000);
+    nemesis_to_vdp(0x03DF62);
+    nemesis_to_ram(0x040D3E, 0xFFB900);
+}
+
+void course_graphics_68k(void)
+{
+    course_graphics();
+    if (course_dma_src)
+        dma_copy_regs(course_dma_src);
 }
 
 static void hud_time(void)             /* $C142 */

@@ -177,3 +177,13 @@ void palette_load_68k(void)
     cpu.d[0] = 0xFFFF;
     cpu.d[1] = 0;
 }
+
+/* Fill words in RAM ($E6D4). */
+void fill_words_68k(void)
+{
+    int k, n = (uint16_t)cpu.d[1] + 1;
+    for (k = 0; k < n; k++)
+        wr16(cpu.a[0] + 2 * k, (uint16_t)cpu.d[0]);
+    cpu.a[0] += 2 * n;
+    set_dn(1, 2, 0xFFFF);
+}

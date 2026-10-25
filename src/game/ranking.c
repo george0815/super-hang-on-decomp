@@ -82,3 +82,23 @@ void ranking_rows_68k(void)
     }
     set_dn(5, 2, 7);
 }
+
+/* Seven default entries ($DC3E): score, stage 1, name, no time. */
+static uint32_t ranking_defaults(uint32_t dst, uint32_t src)
+{
+    int k;
+    for (k = 0; k < 7; k++, dst += 0x0E, src += 8) {
+        wr32(dst, rd32(src));
+        wr16(dst + 4, 1);
+        wr32(dst + 6, rd32(src + 4));
+        wr32(dst + 0x0A, 0);
+    }
+    return src;
+}
+
+void ranking_defaults_68k(void)
+{
+    cpu.a[2] = ranking_defaults(cpu.a[0], cpu.a[2]);
+    cpu.a[0] += 7 * 0x0E;
+    set_dn(0, 2, 0xFFFF);
+}

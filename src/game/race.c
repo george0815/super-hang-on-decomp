@@ -2026,7 +2026,7 @@ void road_hills_68k(void)
  */
 #define SPEED_KMH        0xFF055A
 static uint32_t hud_d4_in;
-static void hud_numbers(void)
+void hud_numbers(void)
 {
     uint16_t base = 0xE0;
     wr16(SPEED_KMH, (uint16_t)bin_to_bcd((uint16_t)(rd16(BIKE_SPEED) * 0x117u / 0xF0)));
@@ -2363,3 +2363,30 @@ static void rival_splits(void)
 }
 
 void rival_splits_68k(void) { rival_splits(); }
+
+/*
+ * A course's first stage ($F6DC): number of stages, the three course
+ * scripts and the scenery colours.
+ */
+static void stage_start(void)
+{
+    uint32_t rec, pal;
+    int k;
+    wr16(0xFF06C2, (uint16_t)(int8_t)rd8(ROM_STAGES + rd16(COURSE)));
+    load_turn_script();
+    load_event_script();
+    load_scenery_script();
+    rec = stage_record(rd16(STAGE));
+    pal = rd32(rec);
+    wr16(0xFFD3E0, rd16(pal));
+    copy_words(0xFFD396, pal + 2, 5);
+    copy_words(0xFFD3E8, pal + 12, 7);
+    pal = rd32(rec + 4);
+    for (k = 0; k < 5; k++) {
+        wr16(0xFFD3D6 + 2 * k, rd16(pal + 4 * k));
+        wr16(0xFFD3F6 + 2 * k, rd16(pal + 4 * k + 2));
+    }
+    wr8(PALETTE_DIRTY, rd8(PALETTE_DIRTY) | 1);
+}
+
+void stage_start_68k(void) { stage_start(); }

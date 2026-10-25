@@ -82,3 +82,21 @@ uint8_t bcd_subx(uint8_t a, uint8_t b, int *x)
     }
     return (uint8_t)(r - adj);
 }
+
+/* Copy the HBlank routine into RAM, where it rewrites its own operand
+   ($6D8E). The native runtime runs its own version of it. */
+void hblank_install(void)
+{
+    int k;
+    for (k = 0; k < 0x17; k++)
+        wr16(0xFF05D2 + 2 * k, rd16(0x006DA6 + 2 * k));
+}
+
+void hblank_install_68k(void)
+{
+    hblank_install();
+    cpu.a[0] = 0x006DA6 + 2 * 0x17;
+    cpu.a[1] = 0xFF05D2 + 2 * 0x17;
+    set_dn(0, 2, 0xFFFF);
+    f_logic(2, rd16(0x006DA6 + 2 * 0x16));
+}
