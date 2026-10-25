@@ -94,3 +94,4 @@
 007F2E  music_graphics_68k
 005358  command_cursor_68k
 005350  command_cursor_blink_68k
+008C58  race_objects_setup_68k

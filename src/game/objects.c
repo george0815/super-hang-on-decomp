@@ -871,7 +871,21 @@ static int crash_script_running(uint32_t obj)
     return (int8_t)rd8(obj + CRASH_KEY_COUNT + 1) > (int8_t)rd8(obj + CRASH_KEY);
 }
 
-/* Put the bike back on the road after a crash ($ACC2, $8CD0). */
+/* The player's bike, standing on the road ($8CD0). */
+static void player_bike_place(void)
+{
+    wr16(PLAYER + OBJ_HANDLER, 8);
+    wr16(PLAYER + OBJ_Z, 0xBF);
+    wr16(PLAYER + OBJ_SCREEN_X, 0x120);
+    wr16(PLAYER + OBJ_SCREEN_Y, 0x15F);
+    wr16(PLAYER + OBJ_VX, 8);
+    wr16(PLAYER + OBJ_VX + 2, 8);
+    wr16(PLAYER + OBJ_SPRITE_MAP, 0x9AC);
+    wr8(PLAYER + 0x34, 4);
+    wr16(0xFFC73C, 0x80);
+}
+
+/* Put the bike back on the road after a crash ($ACC2). */
 static void crash_recover(uint32_t obj)
 {
     int i;
@@ -884,15 +898,53 @@ static void crash_recover(uint32_t obj)
     wr16(0xFFC7BE, 0xFFFF);
     for (i = 0; i < 0x80; i += 4)           /* objects 1 and 2 */
         wr32(PLAYER + i, 0);
-    wr16(PLAYER + OBJ_HANDLER, 8);
-    wr16(PLAYER + OBJ_Z, 0xBF);
-    wr16(PLAYER + OBJ_SCREEN_X, 0x120);
-    wr16(PLAYER + OBJ_SCREEN_Y, 0x15F);
-    wr16(PLAYER + OBJ_VX, 8);
-    wr16(PLAYER + OBJ_VX + 2, 8);
-    wr16(PLAYER + OBJ_SPRITE_MAP, 0x9AC);
-    wr8(PLAYER + 0x34, 4);
-    wr16(0xFFC73C, 0x80);
+    player_bike_place();
+}
+
+/*
+ * Objects for the start of a race ($8C58): everything cleared, five
+ * rivals (alternating tile banks, start distances and lanes from a ROM
+ * table per course, or per original-mode race; parked during the demo),
+ * the rider overlays, the column stopper and the player's bike.
+ */
+#define RIVALS           0xFFCC40
+#define ROM_RIVAL_STARTS 0x00F966   /* 5 x (distance, lane) per course */
+static uint16_t setup_d1;
+static void race_objects_setup(void)
+{
+    uint32_t obj, start;
+    int k;
+    for (k = 0, obj = OBJECTS; k < OBJ_COUNT; k++, obj += OBJ_SIZE)
+        obj_free(obj);
+    for (k = 0, obj = RIVALS; k < 5; k++, obj += OBJ_SIZE) {
+        wr16(obj + OBJ_HANDLER, rd8(SOUND_LOCKED_BYTE) ? 0x48 : 0x49);
+        wr16(obj + OBJ_TILE_BASE, (4 - k) & 1 ? 0x4000 : 0x2000);
+        wr16(obj + 0x32, (uint16_t)(2 + 2 * k));
+        wr16(obj + OBJ_Y + 2, 0x48);
+    }
+    start = ROM_RIVAL_STARTS + 20 * (rd16(HUD_HIDDEN) ? rd16(0xFFC85A) : rd16(0xFF060C));
+    for (k = 0, obj = RIVALS; k < 5; k++, obj += OBJ_SIZE, start += 4) {
+        setup_d1 = rd16(start + 2);
+        wr16(obj + OBJ_DISTANCE, rd16(start));
+        wr16(obj + OBJ_LANE, setup_d1);
+        wr16(obj + OBJ_Y, setup_d1);
+        if (rd8(SOUND_LOCKED_BYTE))
+            wr16(obj + OBJ_DISTANCE, 0);
+    }
+    wr16(0xFFCA00, 0x0C);
+    wr16(0xFFCA00 + OBJ_Z, 0xC1);
+    wr16(0xFFCA40, 0x14);
+    wr16(0xFFCA40 + OBJ_Z, 0xC1);
+    wr16(0xFFC9C0, 0x10);
+    wr16(0xFFC9C0 + OBJ_Z, 0xC1);
+    wr16(0xFFCAC0, 0x44);
+    player_bike_place();
+}
+
+void race_objects_setup_68k(void)
+{
+    race_objects_setup();
+    cpu.d[1] = setup_d1;
 }
 
 /* The fallen rider ($7142). */
