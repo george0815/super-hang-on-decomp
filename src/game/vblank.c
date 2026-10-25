@@ -573,6 +573,7 @@ static void menu_countdown(void)
 void menu_countdown_68k(void) { menu_countdown(); }
 
 static void hud_time(void);
+static void hud_draw_all(void);
 
 /*
  * Draw the whole race HUD ($BA9A): its frame pieces, then (unless in the
@@ -618,6 +619,49 @@ static void hud_draw_all(void)
     }
     wr16(VDP_DATA, 0xA624);
     hud_map_marker();
+}
+
+/*
+ * Open the HUD like a curtain ($88F4): every 4 frames one more line of a
+ * striped pattern; when done, the window plane is reset and the HUD drawn.
+ */
+static int curtain_done;
+static void hud_curtain(void)
+{
+    uint32_t pattern = 0x008958;
+    int16_t step;
+    int n, k;
+    curtain_done = 0;
+    if (!rd8(SOUND_LOCKED + 1))
+        return;
+    wr16(0xFFC71A, rd16(0xFFC71A) - 1);
+    if ((int16_t)rd16(0xFFC71A) >= 0)
+        return;
+    wr16(0xFFC71A, 3);
+    step = (int16_t)(rd16(0xFFC71C) - 1);
+    wr16(0xFFC71C, (uint16_t)step);
+    if (step < 0) {
+        wr16(VDP_CTRL, 0x9207);
+        wr8(SOUND_LOCKED + 1, 0);
+        hud_draw_all();
+        curtain_done = 1;
+        return;
+    }
+    n = 15 - step;
+    if (n >= 8) {
+        n -= 8;
+        pattern += 8;
+    }
+    wr32(VDP_CTRL, 0x5FC00003);
+    for (k = 0; k <= n; k++)
+        wr32(VDP_DATA, rd32(pattern + 4 * (k & 1)));
+}
+
+void hud_curtain_68k(void)
+{
+    hud_curtain();
+    if (curtain_done)
+        set_dn(5, 2, 0xFFFF);
 }
 
 void hud_draw_all_68k(void)
