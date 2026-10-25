@@ -1649,6 +1649,41 @@ static void obj_extended_play(uint32_t obj)
     obj_add_to_layer(obj);
 }
 
+/*
+ * Retirement in original mode ($7156): stops the bike and freezes the
+ * race; after a second the "retire" sound, then a button press (A, B or
+ * C) or 10 seconds ends the race (best lap marked as none).
+ */
+#define RETIRE_DELAY     0x18
+#define RETIRE_TIMEOUT   0x1C
+static void obj_retire(uint32_t obj)
+{
+    if ((rd16(0xFFC704) & ~1) == 0x10)
+        return;
+    if (!(rd8(obj + OBJ_FLAGS) & 1)) {
+        wr8(obj + OBJ_FLAGS, rd8(obj + OBJ_FLAGS) | 1);
+        wr32(BIKE_SPEED, 0);
+        wr16(0xFFC89E, 0xFFFF);
+        wr16(obj + RETIRE_DELAY, 0x3C);
+        wr16(obj + RETIRE_TIMEOUT, 0x258);
+    }
+    if (rd16(obj + RETIRE_DELAY)) {
+        wr16(obj + RETIRE_DELAY, rd16(obj + RETIRE_DELAY) - 1);
+        return;
+    }
+    sound_command(0xB1);
+    wr16(OBJECTS_FROZEN, 0xFFFF);
+    wr16(0xFFC896, 0xFFFF);
+    if (!(rd8(0xFFC707) & 0x70)) {
+        wr16(obj + RETIRE_TIMEOUT, rd16(obj + RETIRE_TIMEOUT) - 1);
+        if (rd16(obj + RETIRE_TIMEOUT))
+            return;
+    }
+    wr32(0xFFB63C, 0xFFFFFFFF);
+    wr32(0xFFB640, rd32(0xFFC83A));
+    wr16(0xFFC720, 0x24);
+}
+
 /* Handlers by index; NULL ones still run recompiled. */
 static void (*const handlers[25])(uint32_t obj) = {
     [(0x710A - 0x710A) / 4] = obj_debris,
@@ -1670,6 +1705,7 @@ static void (*const handlers[25])(uint32_t obj) = {
     [(0x714A - 0x710A) / 4] = obj_line_marker,
     [(0x714E - 0x710A) / 4] = obj_rival,
     [(0x7152 - 0x710A) / 4] = obj_column_stopper,
+    [(0x7156 - 0x710A) / 4] = obj_retire,
 };
 
 /* ------------------------------------------------------ sprite table */
