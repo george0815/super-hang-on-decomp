@@ -2422,3 +2422,50 @@ static void race_start_frame(void)
 }
 
 void race_start_frame_68k(void) { race_start_frame(); }
+
+/* ------------------------------------------------------------ race frame */
+
+/*
+ * The second half of a race frame, after the race logic and the wait
+ * ($8B58): objects and scroll tables, then the engine sound for the
+ * driver: the nearest rival's distance (capped at $80) as the engine
+ * volume, a horn sound ($A9) when one is close and nothing else is
+ * playing, and any pending sound command.
+ */
+static void race_frame_end(void)
+{
+    uint16_t near;
+    int close, k;
+    uint8_t cmd;
+    objects_update();
+    scroll_tables();
+    if (rd16(0xFFC826))
+        wr16(0xFFC826, rd16(0xFFC826) - 1);
+    near = rd16(0xFFC81C);
+    for (k = 0; k < 4; k++)
+        if (rd16(0xFFC81E + 2 * k) <= near)
+            near = rd16(0xFFC81E + 2 * k);
+    close = near < 0x80;
+    if (!close) {
+        near = 0x80;
+        wr16(0xFFC828, 0);
+    }
+    wr8(0xFFC819, (uint8_t)near);
+    if (close && !(rd16(0xFFC826) | rd16(0xFF0666) | rd16(0xFF06BC) | rd16(0xFFC828))) {
+        wr16(0xFFC828, (near & 0xFF00) | 0xA9);
+        wr8(0xFFC80D, 0xA9);
+    }
+    do
+        wr16(Z80_BUSREQ, 0x100);
+    while (rd8(Z80_BUSREQ) & 1);
+    wr8(0xA01C38, rd8(0xFFC819));
+    if ((cmd = rd8(0xFFC80C)) != 0)
+        wr8(0xFFC80C, 0);
+    else if ((cmd = rd8(0xFFC80D)) != 0)
+        wr8(0xFFC80D, 0);
+    if (cmd)
+        wr8(Z80_SOUND_COMMAND, cmd);
+    wr16(Z80_BUSREQ, 0);
+}
+
+void race_frame_end_68k(void) { race_frame_end(); }
