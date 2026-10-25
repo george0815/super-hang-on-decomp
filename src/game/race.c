@@ -1164,3 +1164,175 @@ void race_build_road_68k(void)
     set_dn(1, 2, road_d1);
     cpu.d[4] &= 0xffff;        /* moveq #0,d4 before the fill index */
 }
+
+/* -------------------------------------------------------------- stages */
+
+#define COURSE           0xFF060C
+#define STAGE_DATA_INDEX 0x00FB86   /* per course: 9 words */
+#define STAGE_DATA       0x00FB26   /* pointers to stage records */
+#define ROM_STAGES       0x00FA66   /* stages per course (bytes) */
+#define ROM_STAGES_HIDDEN 0x00FA56
+#define EVENT_SCRIPT     0xFF0602
+#define FADE_TARGET      0xFF08F0   /* 16 colours being faded towards */
+#define FADE_CURRENT     0xFF0910
+#define FADE_ACTIVE      0xFF08D0
+#define FADE_TIMER       0xFFC74E
+#define VRAM_CLEAR_STEP  0xFF057C
+#define PALETTE_BUFFER   0xFFD380
+#define PALETTE_DIRTY    0xFFC708
+
+/* Stage record: palette pointers and the three course scripts ($ED50). */
+static uint32_t stage_record(uint16_t stage)
+{
+    uint16_t i = (uint16_t)(rd16(COURSE) * 18 + stage * 2);
+    return rd32(STAGE_DATA + 4 * rd16(STAGE_DATA_INDEX + i));
+}
+
+static void load_turn_script(void)  { wr32(TURN_SCRIPT, rd32(stage_record(rd16(STAGE)) + 8)); }
+static void load_event_script(void) { wr32(EVENT_SCRIPT, rd32(stage_record(rd16(STAGE)) + 0x0C)); }
+static void load_scenery_script(void) { wr32(SCENERY_SCRIPT, rd32(stage_record(rd16(STAGE)) + 0x10)); }
+
+/* Move a colour two steps per channel towards a target ($E57A/$E594). */
+static uint16_t colour_step(uint16_t target, uint16_t cur)
+{
+    uint16_t out = 0;
+    int sh;
+    for (sh = 8; sh >= 0; sh -= 4) {
+        uint16_t t = (target >> sh) & 0xE, c = (cur >> sh) & 0xE;
+        if (t != c)
+            c = (uint16_t)(c + (t > c ? 2 : -2));
+        out |= (uint16_t)((c & 0xE) << sh);
+    }
+    return out;
+}
+
+static int fade_stepped;   /* for the adapter */
+
+/* Every 4 frames move the fading colours a step and show them ($E524). */
+static void palette_fade_step(void)
+{
+    int k;
+    uint32_t pal = PALETTE_BUFFER + 0x60;   /* $FFD3E0 */
+    fade_stepped = 0;
+    if (!rd16(FADE_ACTIVE))
+        return;
+    wr16(FADE_TIMER, rd16(FADE_TIMER) - 1);
+    if (rd16(FADE_TIMER))
+        return;
+    wr16(FADE_TIMER, 4);
+    fade_stepped = 1;
+    for (k = 0; k < 11; k++)
+        wr16(FADE_CURRENT + 2 * k, colour_step(rd16(FADE_TARGET + 2 * k), rd16(FADE_CURRENT + 2 * k)));
+    /* the faded colours land in two palette lines */
+    wr16(pal, rd16(FADE_CURRENT));
+    for (k = 0; k < 5; k++) {
+        wr16(pal - 0x0A + 2 * k, rd16(FADE_CURRENT + 2 + 4 * k));
+        wr16(pal + 0x16 + 2 * k, rd16(FADE_CURRENT + 4 + 4 * k));
+    }
+    wr8(PALETTE_DIRTY, rd8(PALETTE_DIRTY) | 1);
+}
+
+static void copy_words(uint32_t dst, uint32_t src, int words)
+{
+    int k;
+    for (k = 0; k < words; k++)
+        wr16(dst + 2 * k, rd16(src + 2 * k));
+}
+
+/* Start fading the scenery colours to the next stage's ($E4BA). */
+static void palette_fade_setup(void)
+{
+    uint32_t next = stage_record(rd16(STAGE) + 1), now, a, b;
+    wr16(FADE_ACTIVE, 8);
+    a = rd32(next);
+    wr16(FADE_TARGET, rd16(a));
+    copy_words(0xFFD396, a + 2, 5);
+    copy_words(0xFFD3E8, a + 12, 7);
+    b = rd32(next + 4);
+    copy_words(FADE_TARGET + 2, b, 10);
+    now = stage_record(rd16(STAGE));
+    wr16(FADE_CURRENT, rd16(rd32(now)));
+    copy_words(FADE_CURRENT + 2, rd32(now + 4), 10);
+    wr16(FADE_TIMER, 4);
+}
+
+/* Course scripts for a new stage, or the goal after the last one. */
+static void next_stage(void)
+{
+    uint16_t stages;
+    if (rd16(HUD_HIDDEN)) {
+        wr16(STAGE, rd16(STAGE) + 1);
+        stages = (uint16_t)((rd16(0xFFC85A) & 0xFF00) | rd8(ROM_STAGES_HIDDEN + rd16(0xFFC85A)));
+        if (stages != rd16(STAGE)) {
+            wr32(TURN_SCRIPT, rd32(0xFFC84E));
+            wr32(EVENT_SCRIPT, rd32(0xFFC852));
+            wr32(SCENERY_SCRIPT, rd32(0xFFC856));
+            goto reset;
+        }
+    } else {
+        wr16(STAGE, rd16(STAGE) + 1);
+        stages = (uint16_t)((rd16(COURSE) & 0xFF00) | rd8(ROM_STAGES + rd16(COURSE)));
+        if (stages != rd16(STAGE)) {
+            wr16(0xFFC748, 0);
+            load_turn_script();
+            load_event_script();
+            load_scenery_script();
+            wr16(0xFF0610, 0xFFFF);
+            goto reset;
+        }
+    }
+    /* goal: back to stage 0 with the course's finishing scripts */
+    wr16(STAGE, 0);
+    wr16(TIME_UP, 0x1ED0);
+    wr8(0xFF06C5, 0xFF);
+    wr32(TURN_SCRIPT, rd32(0x0576F0));
+    wr32(EVENT_SCRIPT, rd32(0x0576F4));
+    wr32(SCENERY_SCRIPT, rd32(0x0576F8 + 4 * rd16(COURSE)));
+    wr16(0xFF0610, 0xFFFF);
+reset:
+    wr32(COURSE_PROGRESS, 0);
+    wr32(ROAD_HEADING, 0);
+    wr32(0xFF0578, 0);
+    wr16(0xFF0606, 0);
+    wr16(0xFFC74C, rd16(0xFFC74A) & 0xFF00);
+}
+
+/* Stage changes for one race frame ($E348). */
+void race_stage(void)
+{
+    palette_fade_step();
+    if ((int16_t)rd16(VRAM_CLEAR_STEP) < 0) {
+        if (!(rd16(0xFFC748) | rd16(HUD_HIDDEN)) && (int16_t)rd16(COURSE_PROGRESS) >= 0x78A) {
+            uint16_t stage = rd16(STAGE);
+            wr16(0xFFC748, 0xFF);
+            wr16(0xFF057E, stage);
+            if ((uint8_t)(stage + 1) == rd8(ROM_STAGES + rd16(COURSE))) {
+                wr16(VRAM_CLEAR_STEP, 0xFF80);    /* last stage: just clear */
+            } else {
+                wr16(VRAM_CLEAR_STEP, 0);         /* reload the next stage's scenery */
+                palette_fade_setup();
+                wr16(0xFFC806, rd16(0xFFC806) + 1);
+                if ((int16_t)rd16(VRAM_CLEAR_STEP) >= 6)
+                    wr16(VRAM_CLEAR_STEP, 0xFFFF);
+            }
+        }
+    } else if ((int16_t)rd16(VRAM_CLEAR_STEP) >= 6) {
+        wr16(VRAM_CLEAR_STEP, 0xFFFF);
+    }
+    if ((int16_t)rd16(COURSE_PROGRESS) > 0x800)
+        next_stage();
+    if (!rd16(STOPPED) && (int16_t)rd16(0xFF06B4) < 0)
+        wr16(0xFF06B4, 0);
+}
+
+void race_stage_68k(void)
+{
+    race_stage();
+    if (fade_stepped)
+        cpu.d[4] &= 0xffff;       /* moveq #0,d4 in the colour step */
+}
+
+void load_turn_script_68k(void)    { load_turn_script(); }
+void load_event_script_68k(void)   { load_event_script(); }
+void load_scenery_script_68k(void) { load_scenery_script(); }
+void stage_record_68k(void)        { cpu.a[0] = stage_record(rd16(STAGE)); }

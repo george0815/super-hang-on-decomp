@@ -38,3 +38,8 @@
 009B0C  race_speed_68k
 00E9E8  race_drift_68k
 00ED7C  race_build_road_68k
+00E348  race_stage_68k
+00ED26  load_turn_script_68k
+00ED32  load_event_script_68k
+00ED3E  load_scenery_script_68k
+00ED4A  stage_record_68k

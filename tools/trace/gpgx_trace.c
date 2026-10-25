@@ -10,6 +10,9 @@
  * input.txt lines:  FIRST LAST BUTTONS   (frames inclusive; buttons from
  *                   "UDLRABCS", e.g. "200 210 S" holds Start)
  * -w FILE.wav       also record the audio output
+ * -a FRAME OUT.txt  autopilot from FRAME: hold B and steer towards the road
+ *                   centre; the inputs used are written to OUT.txt as an
+ *                   input script (so gpgx_fncap can replay the session)
  * -s FRAME          also write DIR/frame_NNNNN.ppm and DIR/frame_NNNNN.vdp
  *                   (VRAM, CRAM, VSRAM, registers) for that frame
  *
@@ -32,6 +35,22 @@ sms_ntsc_t *sms_ntsc;
 static struct { int first, last; uint16 pad; } script[MAX_INPUT];
 static int nscript;
 static int cur_frame;
+static int autopilot_from = -1, autopilot_dir = 1;
+static FILE *autopilot_out;
+static uint16 autopilot_last = 0xFFFF;
+static int autopilot_since;
+
+static void autopilot_flush(int frame)
+{
+  static const char names[] = "UDLRBCAS";
+  char btn[16];
+  int k, n = 0;
+  if (autopilot_last == 0xFFFF || !autopilot_out) return;
+  for (k = 0; k < 8; k++)
+    if (autopilot_last & (1 << k)) btn[n++] = names[k];
+  btn[n] = 0;
+  if (n) fprintf(autopilot_out, "%d %d %s\n", autopilot_since, frame - 1, btn);
+}
 
 int sdl_input_update(void)
 {
@@ -40,6 +59,34 @@ int sdl_input_update(void)
   for (i = 0; i < nscript; i++)
     if (cur_frame >= script[i].first && cur_frame <= script[i].last)
       pad |= script[i].pad;
+  if (autopilot_from >= 0 && cur_frame >= autopilot_from)
+  {
+    /* road curve: positive = off to one side */
+    int16 curve = (int16)(READ_BYTE(work_ram, 0x0614) << 8 | READ_BYTE(work_ram, 0x0615));
+    int th = getenv("AP_TH") ? atoi(getenv("AP_TH")) : 24;
+    int avoid = getenv("AP_AVOID") ? atoi(getenv("AP_AVOID")) : 0, r;
+    pad = INPUT_B | (getenv("AP_TURBO") ? INPUT_C : 0);
+    /* steer around rivals close ahead (records at $FF0804: obj, lane, depth) */
+    for (r = 0; avoid && r < 5; r++)
+    {
+      int a = 0x0804 + 8 * r;
+      int16 lane = (int16)(READ_BYTE(work_ram, a + 4) << 8 | READ_BYTE(work_ram, a + 5));
+      int16 depth = (int16)(READ_BYTE(work_ram, a + 6) << 8 | READ_BYTE(work_ram, a + 7));
+      if (depth > 0x80 && depth < 0xC0 && lane > -0x50 && lane < 0x50)
+      {
+        curve = (int16)(curve - (lane >= 0 ? -avoid : avoid));
+        break;
+      }
+    }
+    if (curve > th) pad |= autopilot_dir > 0 ? INPUT_LEFT : INPUT_RIGHT;
+    if (curve < -th) pad |= autopilot_dir > 0 ? INPUT_RIGHT : INPUT_LEFT;
+  }
+  if (autopilot_out && pad != autopilot_last)
+  {
+    autopilot_flush(cur_frame);
+    autopilot_last = pad;
+    autopilot_since = cur_frame;
+  }
   input.pad[0] = pad;
   return 1;
 }
@@ -141,6 +188,12 @@ int main(int argc, char **argv)
     if (!strcmp(argv[i], "-i") && i + 1 < argc) load_script(argv[++i]);
     else if (!strcmp(argv[i], "-s") && i + 1 < argc && nshots < 256) shots[nshots++] = atoi(argv[++i]);
     else if (!strcmp(argv[i], "-d") && i + 1 < argc) dir = argv[++i];
+    else if (!strcmp(argv[i], "-a") && i + 2 < argc)
+    {
+      autopilot_from = atoi(argv[++i]);
+      autopilot_out = fopen(argv[++i], "w");
+    }
+    else if (!strcmp(argv[i], "-r")) autopilot_dir = -1;
     else if (!strcmp(argv[i], "-w") && i + 1 < argc) { wav = fopen(argv[++i], "wb"); if (wav) fseek(wav, 44, SEEK_SET); }
   }
 
@@ -192,6 +245,11 @@ int main(int argc, char **argv)
         write_shot(dir, cur_frame);
   }
   fclose(out);
+  if (autopilot_out)
+  {
+    autopilot_flush(cur_frame);
+    fclose(autopilot_out);
+  }
   if (wav)
   {
     uint32 data = wav_frames * 4, riff = data + 36, rate = 44100, bps = rate * 4;
