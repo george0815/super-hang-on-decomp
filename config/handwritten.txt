@@ -36,3 +36,5 @@
 00975C  race_input_68k
 0098E4  race_sounds_68k
 009B0C  race_speed_68k
+00E9E8  race_drift_68k
+00ED7C  race_build_road_68k

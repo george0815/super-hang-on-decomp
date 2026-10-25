@@ -66,6 +66,8 @@ void race_rivals(void);
 void race_input(void);
 void race_sounds(void);
 void race_speed(void);
+void race_drift(void);
+void race_build_road(void);
 
 /* ---------------------------------------------------------- objects.c */
 void obj_add_to_layer(uint32_t obj);

@@ -915,3 +915,252 @@ void race_speed_68k(void)
     if ((rd16(GAME_MODE) & ~1) != 0x10)
         set_dn(1, 2, speed_d1);
 }
+
+/* ------------------------------------------------------------- drift */
+
+#define ROAD_BEND_LINES  0xFF0B00   /* per scanline: accumulated road bend */
+
+static uint16_t drift_d1;
+
+/*
+ * Bends push the bike outwards ($E9E8): the difference in road bend between
+ * a line ahead (closer during turbo) and the bottom of the screen, scaled
+ * by speed, moves the curve value, unless that would leave the road.
+ */
+void race_drift(void)
+{
+    uint16_t ahead = rd8(TURBO) ? 0xA6 - 0x1A : 0xA6;
+    int16_t bend, push, step = 1, curve;
+    drift_d1 = ahead;
+    if (rd16(0xFFC7F8))
+        return;
+    bend = (int16_t)divs_q((int16_t)(rd16(ROAD_BEND_LINES + ahead) - rd16(ROAD_BEND_LINES + 0x1B8)), 0x40);
+    if (bend == 0)
+        return;
+    push = (int16_t)divs_q((int32_t)bend * (int16_t)rd16(BIKE_SPEED), 0x6E);
+    if (push < 0)
+        step = -1;
+    curve = (int16_t)((push + step) * 2 + (int16_t)rd16(ROAD_CURVE));
+    drift_d1 = (uint16_t)(curve < 0 ? -curve : curve);
+    if ((int16_t)drift_d1 > (int16_t)rd16(0x009F8E))
+        return;
+    wr16(ROAD_CURVE, (uint16_t)curve);
+}
+
+void race_drift_68k(void)
+{
+    race_drift();
+    if (rd16(0xFFC7F8))
+        return;
+    set_dn(1, 2, drift_d1);
+}
+
+/* -------------------------------------------------------- road builder */
+
+#define ROM_SQUARES      0x00F9F2   /* k*k for the hex square root */
+#define ROM_SEGMENT_LINES 0x00FA14  /* screen line of each of 33 segments */
+#define TRACK_GEOMETRY   0xFF0800   /* long: the course's direction vectors */
+#define ROAD_CENTRE_LINES 0xFF0D00
+#define ROAD_SCRATCH     0xFF0730
+#define ROAD_HEADING     0xFF061A
+
+/*
+ * Integer square root, one hex digit at a time from the most significant
+ * non-zero byte ($F2C4). Kept literal so rounding matches the original.
+ */
+static uint16_t isqrt_hex(uint32_t n)
+{
+    uint32_t d0 = n, d1, d3 = 0, d7;
+    uint16_t d4 = 0, d5;
+    int32_t d6;
+    int d2 = 3;
+    if (n == 0)
+        return 0;
+    for (;;) {
+        d0 = d0 << 8 | d0 >> 24;
+        if (d0 & 0xff)
+            break;
+        if (--d2 < 0)
+            break;
+    }
+    d1 = d0 & 0xff;
+    for (;;) {
+        int32_t t;
+        d5 = (uint16_t)-2;
+        d6 = -(int32_t)d3;
+        do {
+            d5 += 2;
+            d6 += (int32_t)d3;
+            t = (int32_t)(rd16(ROM_SQUARES + d5) + d6 - d1);
+        } while (t < 0);
+        if (t != 0) {
+            d5 -= 2;
+            d6 -= (int32_t)d3;
+            d7 = (uint32_t)(rd16(ROM_SQUARES + d5) + d6);
+            d7 = d1 - d7;          /* remainder (sub then exg) */
+        } else {
+            d7 = 0;
+        }
+        d5 >>= 1;
+        d4 = (uint16_t)((d4 << 4) + d5);
+        if (d2 == 0)
+            break;
+        d3 = (d3 + 2u * d5) << 4;
+        d7 <<= 8;
+        d0 = d0 << 8 | d0 >> 24;
+        d1 = (d0 & 0xff) + d7;
+        d2--;
+    }
+    return d4;
+}
+
+static uint16_t road_d1;
+
+/* Direction of the track at the bike: a binary angle ($200 per quadrant). */
+static uint16_t track_heading(uint32_t p)
+{
+    int16_t x = (int16_t)(2 * (rd16(p) + rd16(p + 4)));
+    int16_t y = (int16_t)(2 * (rd16(p + 2) + rd16(p + 6)));
+    int16_t ax = x < 0 ? (int16_t)-x : x, ay = y < 0 ? (int16_t)-y : y;
+    uint16_t a;
+    int steep = (int16_t)(ax - ay) < 0;
+    if (steep)
+        a = divs_q((int32_t)x << 8, (uint16_t)y);
+    else
+        a = divs_q(-((int32_t)y << 8), (uint16_t)x);
+    if (x > 0 || (x == 0 && y >= 0))
+        a += 0x200;
+    else
+        a += 0x600;
+    if (steep)
+        a += ((int32_t)x * y < 0) ? 0x200 : 0xFE00;
+    return a;
+}
+
+/*
+ * Project the road ahead into the per-line bend table ($ED7C): walk 33
+ * track segments from the bike, rotate them into the bike's heading,
+ * divide the sideways offset by depth and fill the scanlines between
+ * consecutive segments by linear interpolation; then double the 96 lines
+ * to 192 and derive the road centre lines (plus the sideways sweep while
+ * being pushed).
+ */
+void race_build_road(void)
+{
+    const uint32_t sc = ROAD_SCRATCH;
+    uint32_t base, p;
+    uint16_t idx, len;
+    int16_t vx, vy, dirx, diry, prev_x = 0, prev_line = 0;
+    int32_t px = 0, py = 0;
+    int seg, out = 0xBE;
+
+    if (rd16(0xFFC8A8))
+        return;
+    idx = (uint16_t)(((int16_t)rd16(COURSE_PROGRESS) >> 1) * 4);
+    wr16(sc, idx);
+    base = rd32(TRACK_GEOMETRY);
+    p = base + (int16_t)idx;
+    vx = (int16_t)(rd16(p) + rd16(p + 4));
+    vy = (int16_t)(rd16(p + 2) + rd16(p + 6));
+    wr16(sc + 0x30, (uint16_t)vx);
+    wr16(sc + 0x40, (uint16_t)vy);
+    len = isqrt_hex((uint32_t)((int32_t)vx * vx + (int32_t)vy * vy));
+    dirx = (int16_t)divs_q((int32_t)vx << 14, len);
+    diry = (int16_t)divs_q((int32_t)vy << 14, len);
+    wr16(sc + 0x50, (uint16_t)dirx);
+    wr16(sc + 0x60, (uint16_t)diry);
+    wr16(ROAD_HEADING, track_heading(p));
+    wr32(sc + 0x70, 0);
+    wr32(sc + 0x80, 0);
+    wr16(sc + 0x90, 0);
+    wr16(sc + 0xA0, 0);
+
+    for (seg = 0x20; seg >= 0; seg--, p += 4) {
+        int16_t x, y, side, line, span;
+        int32_t fwd;
+        px += (int16_t)rd16(p) + (int16_t)rd16(p + 4);
+        py += (int16_t)rd16(p + 2) + (int16_t)rd16(p + 6);
+        wr32(sc + 0x70, (uint32_t)px);
+        wr32(sc + 0x80, (uint32_t)py);
+        x = (int16_t)(px >> 5);
+        y = (int16_t)(py >> 5);
+        fwd = ((int32_t)x * dirx + (int32_t)y * diry) >> 7;
+        side = (int16_t)divs_q((int32_t)x * diry - (int32_t)y * dirx, (uint16_t)((fwd >> 7) + 0x410));
+        line = (int16_t)rd16(ROM_SEGMENT_LINES + 2 * seg);
+        wr16(sc + 0xB0, (uint16_t)side);
+        wr16(sc + 0xC0, (uint16_t)line);
+        span = (int16_t)(line - prev_line);
+        if (span < 0)
+            break;
+        if (span == 0)
+            continue;
+        {
+            int16_t step = (int16_t)divs_q((int16_t)(side - prev_x), (uint16_t)span);
+            int16_t v = prev_x, l = prev_line;
+            do {
+                v = (int16_t)(v + step);
+                l++;
+                if (v > 0x3200 || v < (int16_t)0xCE00)
+                    goto expand;
+                wr16(ROAD_BEND_LINES + out, (uint16_t)v);
+                out -= 2;
+                if (out < 0)
+                    goto expand;
+            } while (l != line);
+        }
+        prev_x = side;
+        prev_line = line;
+        wr16(sc + 0x90, (uint16_t)side);
+        wr16(sc + 0xA0, (uint16_t)line);
+    }
+expand:
+    /* 96 lines -> 192 by inserting midpoints, from the bottom up */
+    {
+        uint32_t src = ROAD_BEND_LINES + 0xBE, dst = ROAD_BEND_LINES + 0x180;
+        int k;
+        for (k = 0; k < 0x5F; k++) {
+            int16_t a = (int16_t)rd16(src), b;
+            dst -= 2;
+            wr16(dst, (uint16_t)a);
+            src -= 2;
+            b = (int16_t)rd16(src);
+            a = (int16_t)(a + ((int16_t)(b - a) >> 1));
+            dst -= 2;
+            wr16(dst, (uint16_t)a);
+        }
+        {
+            int16_t b = (int16_t)rd16(src + 2), d = (int16_t)((int16_t)(rd16(src) - b) >> 1);
+            road_d1 = (uint16_t)d;
+            wr16(src + 2, (uint16_t)(b + d));
+        }
+    }
+    /* road centre lines: the bend, plus a sweep while being pushed */
+    {
+        int16_t sweep = (int16_t)(rd16(0xFF0622) << 6);
+        int k;
+        if (sweep == 0) {
+            for (k = 0; k < 0xE0; k++)
+                wr16(ROAD_CENTRE_LINES + 2 * k, rd16(ROAD_BEND_LINES + 2 * k));
+            return;
+        }
+        sweep = (int16_t)divs_q(sweep, 0xE0);
+        {
+            uint16_t acc = 0;
+            for (k = 0; k < 0xE0; k++) {
+                uint16_t b = rd16(ROAD_BEND_LINES + 2 * k);
+                wr16(ROAD_CENTRE_LINES + 2 * k, (uint16_t)((b == 0x3210 ? 0 : acc) + b));
+                acc = (uint16_t)(acc + sweep);
+            }
+            road_d1 = acc;
+        }
+    }
+}
+
+void race_build_road_68k(void)
+{
+    if (rd16(0xFFC8A8))
+        return;
+    race_build_road();
+    set_dn(1, 2, road_d1);
+    cpu.d[4] &= 0xffff;        /* moveq #0,d4 before the fill index */
+}
