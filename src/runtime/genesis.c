@@ -174,7 +174,7 @@ static void hblank_handler(void)
 
 void gen_take_irq(int level, uint32_t pc)
 {
-    verify_interrupt();
+    verify_interrupt(level);
     push32(pc);
     push16(get_sr());
     cpu.sr_hi = (uint8_t)((cpu.sr_hi & 0xf8) | 0x20 | level);
@@ -185,6 +185,7 @@ void gen_take_irq(int level, uint32_t pc)
     } else {
         hblank_handler();
     }
+    verify_interrupt_end(level);
 }
 
 /* The Z80 gets its interrupt at VBlank; one frame of audio is produced here */

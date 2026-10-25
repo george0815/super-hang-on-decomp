@@ -721,6 +721,232 @@ static void obj_continue_countdown(uint32_t obj)
         obj_add_to_layer(obj);
 }
 
+/* ------------------------------------------------------------ crashes */
+
+/*
+ * After a crash the rider and the bike each follow a keyframe script: a
+ * count word, then 8-byte keys (sprite map word, hold time, depth, height,
+ * frame, lateral speed word). The road curve value (ROAD_CURVE) carries
+ * them sideways until it is brought back through zero.
+ */
+#define ROAD_CURVE      0xFF0614
+#define CRASH_TYPE      0xFF069A  /* 0 slow, 1 fast (speed above $96) */
+#define CRASHING        0xFF0666
+#define CRASH_KEY       0x32      /* byte: next key index */
+#define CRASH_HOLD      0x33      /* byte */
+#define CRASH_HEIGHT    0x34      /* word */
+#define CRASH_LATERAL   0x30      /* word */
+#define CRASH_KEYS      0x36      /* long: address of the first key */
+#define CRASH_KEY_COUNT 0x3C
+
+static void crash_load_script(uint32_t obj, uint32_t scripts)
+{
+    uint32_t script = rd32(scripts + 4 * rd16(CRASH_TYPE));
+    wr16(obj + CRASH_KEY_COUNT, rd16(script));
+    wr32(obj + CRASH_KEYS, script + 2);
+    wr8(obj + CRASH_HOLD, 0);
+    wr16(obj + OBJ_SCREEN_Y, 0x15F);
+    wr16(obj + OBJ_SCREEN_X, 0x120);
+}
+
+/* Rider: freeze the race state and pick the script by speed ($ADCE). */
+static void crash_start_rider(uint32_t obj)
+{
+    wr16(0xFF06A6, rd16(ROAD_CURVE));
+    wr16(0xFF062E, 0);
+    wr16(0xFF0630, 0);
+    wr16(0xFFC802, 0);
+    wr16(0xFFC828, 0);
+    wr16(0xFFC7F8, 0xFFFF);
+    wr16(CRASH_TYPE, (int16_t)rd16(BIKE_SPEED) > 0x96 ? 1 : 0);
+    {
+        uint32_t script = rd32(0x00AFCA + 4 * rd16(CRASH_TYPE));
+        wr16(obj + CRASH_KEY_COUNT, rd16(script));
+        wr32(obj + CRASH_KEYS, script + 2);
+    }
+    wr16(CRASHING, 0xFFFF);
+    wr16(0xFFC7FE, 2);
+    wr8(obj + CRASH_HOLD, 0);
+    wr16(obj + OBJ_SCREEN_Y, 0x15F);
+    wr16(obj + OBJ_SCREEN_X, 0x120);
+}
+
+/* A sound at two keys of each script ($AE3E). */
+static void crash_key_sound(uint32_t obj)
+{
+    uint32_t t = 0x00AFC2 + 4 * rd16(CRASH_TYPE);
+    int j;
+    for (j = 0; j < 2; j++, t += 2)
+        if (rd8(t) == rd8(obj + CRASH_KEY)) {
+            wr16(0xFFC816, 0x0E);
+            wr8(0xFFC80C, rd8(t + 1));
+            return;
+        }
+}
+
+/* Apply the current key, advance to the next one ($ACFA). */
+static void crash_key_step(uint32_t obj)
+{
+    uint8_t i = rd8(obj + CRASH_KEY);
+    uint32_t key = rd32(obj + CRASH_KEYS) + i * 8u;
+    uint16_t lateral = rd16(key + 6);
+    wr16(obj + OBJ_SPRITE_MAP, rd16(key));
+    wr16(obj + OBJ_Z, rd8(key + 3));
+    wr8(obj + CRASH_HEIGHT + 1, rd8(key + 4));
+    if ((int16_t)rd16(ROAD_CURVE) >= 0)
+        lateral = (uint16_t)-lateral;
+    wr16(obj + CRASH_LATERAL, lateral);
+    if ((int16_t)i < (int16_t)rd16(obj + CRASH_KEY_COUNT)) {
+        wr8(obj + CRASH_HOLD, rd8(key + 2));
+        wr8(obj + OBJ_SPRITE_SET, rd8(key + 5));
+        wr8(obj + CRASH_KEY, i + 1);
+        crash_key_sound(obj);
+    }
+}
+
+/* Tile source and length of the current frame into a DMA slot ($AF2C). */
+static void crash_frame_tiles(uint32_t obj, uint32_t table, uint32_t slot, uint32_t length)
+{
+    uint32_t e = table + (uint16_t)(rd8(obj + OBJ_SPRITE_SET) * 6);
+    wr16(length, rd16(e));
+    wr32(slot, rd32(e + 2));
+}
+
+/* Screen position from depth, lateral offset and height ($AD50). */
+static void crash_project(uint32_t obj)
+{
+    int16_t depth = (int16_t)rd16(obj + OBJ_Z);
+    int16_t x = (int16_t)((int32_t)(int16_t)rd16(obj + CRASH_LATERAL) * depth / 0xE0);
+    int16_t lift = (int16_t)((int32_t)(int16_t)rd16(obj + CRASH_HEIGHT) * depth / 0xC0);
+    wr16(obj + OBJ_SCREEN_X, (uint16_t)(x + 0x120));
+    wr16(obj + OBJ_SCREEN_Y, (uint16_t)(road_screen_y((uint16_t)depth, 0x100) - lift));
+}
+
+/* Push the curve further out, up to a limit ($AD96, $ADAA). */
+static void crash_slide_out(void)
+{
+    int16_t c = (int16_t)rd16(ROAD_CURVE), limit = (int16_t)rd16(0x009F8E);
+    c = (int16_t)(c + (c >= 0 ? 0x10 : -0x10));
+    wr16(ROAD_CURVE, (uint16_t)c);
+    if (c >= 0 ? c >= limit : -c >= limit)
+        wr16(ROAD_CURVE, (uint16_t)(c >= 0 ? limit : -limit));
+}
+
+/* Bring the curve back towards zero, moving the piece with it; returns 1
+   once it has crossed zero. */
+static int crash_slide_back(uint32_t obj, int move_curve)
+{
+    uint16_t step = (uint16_t)((uint32_t)0x10 * rd16(obj + OBJ_Z) / 0xBF);
+    int16_t c = (int16_t)rd16(ROAD_CURVE);
+    if (c < 0) {
+        if (move_curve)
+            wr16(ROAD_CURVE, (uint16_t)(c + 0x10));
+        wr16(obj + OBJ_SCREEN_X, rd16(obj + OBJ_SCREEN_X) + step);
+        return (int16_t)rd16(ROAD_CURVE) >= 0;
+    }
+    if (move_curve)
+        wr16(ROAD_CURVE, (uint16_t)(c - 0x10));
+    wr16(obj + OBJ_SCREEN_X, rd16(obj + OBJ_SCREEN_X) - step);
+    return (int16_t)rd16(ROAD_CURVE) < 0;
+}
+
+/* Next key when the hold runs out, then reproject. */
+static void crash_animate(uint32_t obj, uint32_t tiles, uint32_t slot, uint32_t length)
+{
+    int8_t hold = (int8_t)(rd8(obj + CRASH_HOLD) - 2);
+    wr8(obj + CRASH_HOLD, (uint8_t)hold);
+    if (hold < 0) {
+        crash_key_step(obj);
+        if (rd16(obj + OBJ_SPRITE_MAP) != rd16(obj + OBJ_ANIM)) {
+            wr16(obj + OBJ_ANIM, rd16(obj + OBJ_SPRITE_MAP));
+            crash_frame_tiles(obj, tiles, slot, length);
+        }
+    }
+    crash_project(obj);
+}
+
+static int crash_script_running(uint32_t obj)
+{
+    return (int8_t)rd8(obj + CRASH_KEY_COUNT + 1) > (int8_t)rd8(obj + CRASH_KEY);
+}
+
+/* Put the bike back on the road after a crash ($ACC2, $8CD0). */
+static void crash_recover(uint32_t obj)
+{
+    int i;
+    wr8(obj + CRASH_KEY, 0);
+    wr16(0xFF0658, rd16(0xFF0656));
+    wr16(CRASHING, 0);
+    wr16(0xFF065A, 0);
+    wr16(0xFFC7F8, 0);
+    wr16(0xFFC894, 0);
+    wr16(0xFFC7BE, 0xFFFF);
+    for (i = 0; i < 0x80; i += 4)           /* objects 1 and 2 */
+        wr32(PLAYER + i, 0);
+    wr16(PLAYER + OBJ_HANDLER, 8);
+    wr16(PLAYER + OBJ_Z, 0xBF);
+    wr16(PLAYER + OBJ_SCREEN_X, 0x120);
+    wr16(PLAYER + OBJ_SCREEN_Y, 0x15F);
+    wr16(PLAYER + OBJ_VX, 8);
+    wr16(PLAYER + OBJ_VX + 2, 8);
+    wr16(PLAYER + OBJ_SPRITE_MAP, 0x9AC);
+    wr8(PLAYER + 0x34, 4);
+    wr16(0xFFC73C, 0x80);
+}
+
+/* The fallen rider ($7142). */
+static void obj_crash_rider(uint32_t obj)
+{
+    if ((int8_t)rd8(obj + CRASH_KEY) <= 0)
+        crash_start_rider(obj);
+    if (rd16(OBJECTS_FROZEN) | rd16(0xFFC89E))
+        goto draw;
+    if (crash_script_running(obj)) {
+        crash_slide_out();
+    } else {
+        if (rd16(HUD_HIDDEN)) {
+            if (!rd16(0xFFC894)) {
+                wr16(0xFFB648, rd16(0xFFB648) - 3);
+                wr16(0xFFB64A, rd16(0xFFB64A) - 1);
+                wr16(0xFFB64C, rd16(0xFFB64C) - 2);
+                wr16(0xFFB64E, rd16(0xFFB64E) - 2);
+                wr16(0xFFC894, rd16(0xFFC894) + 1);
+            }
+            if (((int16_t)rd16(0xFFB648) < 0 || (int16_t)rd16(0xFFB64A) < 0 ||
+                 (int16_t)rd16(0xFFB652) < 0) && !rd16(0xFFC898)) {
+                wr16(0xFFC898, rd16(0xFFC898) + 1);
+                wr16(OBJECTS + OBJ_HANDLER, 0x50);
+            }
+        }
+        if ((int8_t)rd8(obj + CRASH_HOLD) < 0) {
+            if (crash_slide_back(obj, 1)) {
+                crash_recover(obj);
+                return;
+            }
+            goto draw;
+        }
+    }
+    crash_animate(obj, 0x00AF44, 0xFFC796, 0xFFC7FA);
+draw:
+    obj_add_to_layer(obj);
+}
+
+/* The tumbling bike ($7146). */
+static void obj_crash_bike(uint32_t obj)
+{
+    if (!rd16(CRASHING))
+        return;
+    if ((int8_t)rd8(obj + CRASH_KEY) <= 0)
+        crash_load_script(obj, 0x00AFD2);
+    if (!(rd16(OBJECTS_FROZEN) | rd16(0xFFC89E))) {
+        if (!crash_script_running(obj) && (int8_t)rd8(obj + CRASH_HOLD) < 0)
+            crash_slide_back(obj, 0);
+        else
+            crash_animate(obj, 0x00AF86, 0xFFC79E, 0xFFC7FC);
+    }
+    obj_add_to_layer(obj);
+}
+
 /* Handlers by index; NULL ones still run recompiled. */
 static void (*const handlers[25])(uint32_t obj) = {
     [(0x710A - 0x710A) / 4] = obj_debris,
@@ -734,6 +960,8 @@ static void (*const handlers[25])(uint32_t obj) = {
     [(0x7136 - 0x710A) / 4] = obj_start_lights,
     [(0x713A - 0x710A) / 4] = obj_scenery,
     [(0x713E - 0x710A) / 4] = obj_continue_countdown,
+    [(0x7142 - 0x710A) / 4] = obj_crash_rider,
+    [(0x7146 - 0x710A) / 4] = obj_crash_bike,
     [(0x711E - 0x710A) / 4] = obj_blinker,
     [(0x714A - 0x710A) / 4] = obj_line_marker,
     [(0x7152 - 0x710A) / 4] = obj_column_stopper,

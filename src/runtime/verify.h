@@ -25,7 +25,8 @@ void verify_call(uint32_t addr, const char *name, void (*original)(void),
 int verify_hw_read(int width, uint32_t addr, uint32_t *value);   /* 1 = handled */
 void verify_hw_log_read(int width, uint32_t addr, uint32_t value);
 int verify_hw_write(int width, uint32_t addr, uint32_t value);   /* 1 = handled */
-void verify_interrupt(void);    /* an interrupt was taken */
+void verify_interrupt(int level);      /* an interrupt is being taken */
+void verify_interrupt_end(int level);  /* and has returned */
 
 void verify_report(void);
 extern long verify_failures;

@@ -15,7 +15,7 @@ long verify_failures;
 typedef struct { uint8_t kind, width; uint32_t addr, value; } Access;
 
 static Access io[MAX_IO];
-static int nio, iopos, io_overflow, io_mismatch, tainted;
+static int nio, iopos, io_overflow, io_mismatch, tainted, in_hblank;
 static char mismatch_msg[160];
 
 static struct {
@@ -56,13 +56,15 @@ int verify_hw_read(int width, uint32_t addr, uint32_t *value)
 
 void verify_hw_log_read(int width, uint32_t addr, uint32_t value)
 {
-    if (verify_mode != VERIFY_ORIGINAL) return;
+    if (verify_mode != VERIFY_ORIGINAL || in_hblank) return;
     if (nio == MAX_IO) { io_overflow = 1; return; }
     io[nio++] = (Access){ 'R', (uint8_t)width, addr, value };
 }
 
 int verify_hw_write(int width, uint32_t addr, uint32_t value)
 {
+    if (verify_mode == VERIFY_ORIGINAL && in_hblank)
+        return 0;
     if (verify_mode == VERIFY_ORIGINAL) {
         if (nio == MAX_IO) io_overflow = 1;
         else io[nio++] = (Access){ 'W', (uint8_t)width, addr, value };
@@ -84,10 +86,27 @@ int verify_hw_write(int width, uint32_t addr, uint32_t value)
     return 1;   /* captured, not performed */
 }
 
-void verify_interrupt(void)
+/*
+ * The HBlank handler only reads the line counter, writes vertical scroll and
+ * advances its own operand ($FF05F2), so it can run in the middle of a
+ * verified call: its accesses are not logged and the operand is not
+ * compared. Any other interrupt makes the call unverifiable.
+ */
+#define HBLANK_OPERAND 0x05F2   /* $FF05F2 */
+void verify_interrupt(int level)
 {
-    if (verify_mode == VERIFY_ORIGINAL)
+    if (verify_mode != VERIFY_ORIGINAL)
+        return;
+    if (level == 4)
+        in_hblank = 1;
+    else
         tainted = 1;
+}
+
+void verify_interrupt_end(int level)
+{
+    if (level == 4)
+        in_hblank = 0;
 }
 
 /* ---------------------------------------------------------- comparison */
@@ -140,7 +159,7 @@ void verify_call(uint32_t addr, const char *name, void (*original)(void),
 
     memcpy(ram_before, m68k_ram, sizeof ram_before);
     cpu_before = cpu;
-    nio = iopos = io_overflow = io_mismatch = tainted = 0;
+    nio = iopos = io_overflow = io_mismatch = tainted = in_hblank = 0;
 
     verify_mode = VERIFY_ORIGINAL;
     original();
@@ -187,6 +206,7 @@ void verify_call(uint32_t addr, const char *name, void (*original)(void),
             uint32_t i;
             for (i = 0; i < 0x10000; i++) {
                 if (i < stack_lo) continue;
+                if (i == HBLANK_OPERAND || i == HBLANK_OPERAND + 1) continue;
                 if (m68k_ram[i] != ram_after[i]) {
                     snprintf(msg, sizeof msg, "ram[FF%04X] = %02X, original %02X (was %02X)",
                              i, m68k_ram[i], ram_after[i], ram_before[i]);
