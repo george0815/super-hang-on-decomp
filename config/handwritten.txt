@@ -82,3 +82,5 @@
 0075D2  title_launch_68k
 0075D6  title_launch_68k
 0075DA  title_launch_68k
+008210  screen_reset_68k
+00833E  plane_a_fill_68k

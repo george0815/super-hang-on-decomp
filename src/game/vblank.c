@@ -124,6 +124,56 @@ static void dma_clear(uint32_t command, uint16_t bytes)
     z80_bus_release();
 }
 
+/* Fill the plane A name table with one entry, 28 rows of 40 ($8344,
+   $833E with entry $E6FE). */
+static void plane_a_fill(uint16_t entry)
+{
+    uint32_t cmd = 0x50000003;
+    int row;
+    wr16(VDP_CTRL, 0x921C);
+    for (row = 0; row < 28; row++, cmd += 0x800000)
+        vdp_fill(cmd, entry, 0x28);
+}
+
+/*
+ * Blank the screen and clear VRAM ($8210): display off, window off,
+ * clear the name tables, scroll tables, sprite table (and its RAM copy)
+ * and the pattern area at $8000 to zero; plane A gets entry $E000.
+ * Interrupts stay masked for the mode's setup.
+ */
+static void screen_reset(void)
+{
+    int k;
+    wr8(VDP_MODE_SHADOW + 3, rd8(VDP_MODE_SHADOW + 3) & ~0x40);
+    wr16(VDP_CTRL, rd16(VDP_MODE_SHADOW + 2));
+    wr16(VDP_CTRL, 0x8AFF);
+    dma_clear(0x4C000003, 0x37F);
+    vdp_fill(0x40000010, 0, 0x29);
+    for (k = 0; k < 0x140; k++)
+        wr16(0xFFD100 + 2 * k, 0);
+    dma_clear(0x48000003, 0x13F);
+    dma_clear(0x40000003, 0x27F);
+    dma_clear(0x60000003, 0x1FFF);
+    plane_a_fill(0xE000);
+}
+
+void screen_reset_68k(void)
+{
+    set_sr(get_sr() | 0x700);
+    screen_reset();
+    set_dn(5, 2, 0xE000);
+    cpu.d[4] = 0xFFFF;
+    cpu.x = 0;
+}
+
+void plane_a_fill_68k(void)
+{
+    plane_a_fill(0xE6FE);
+    set_dn(5, 2, 0xE6FE);
+    cpu.d[4] = 0xFFFF;
+    cpu.x = 0;
+}
+
 static uint32_t vram_write_command(uint16_t addr)
 {
     return (0x4000u | (addr & 0x3fff)) << 16 | addr >> 14;
