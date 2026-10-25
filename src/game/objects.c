@@ -109,15 +109,24 @@ static void obj_project_distance(uint32_t obj)
     wr16(obj + OBJ_SCREEN_Y, road_screen_y(line, 0x100));
 }
 
-/* Lane offset scaled by perspective plus the road centre -> screen x ($C86A). */
+/* Lane offset scaled by the scanline's perspective, rounded away from zero
+   by 4 ($C86A divides by $BF, $C89C by $E0). */
+static int16_t lane_offset(uint32_t obj, int16_t divisor)
+{
+    int32_t scaled = (int32_t)(int16_t)rd16(obj + OBJ_LANE) * (int16_t)rd16(obj + OBJ_ROAD_LINE);
+    int16_t offset = (int16_t)(scaled / divisor);
+    return (int16_t)(offset + (offset >= 0 ? 4 : -4));
+}
+
+static int16_t road_centre(uint32_t obj)
+{
+    return (int16_t)rd16(ROAD_X_LINES + 2 * rd16(obj + OBJ_ROAD_LINE)) >> 6;
+}
+
+/* Road centre plus lane offset -> screen x ($C86A). */
 static void obj_project_lane(uint32_t obj)
 {
-    uint16_t line = rd16(obj + OBJ_ROAD_LINE);
-    int16_t centre = (int16_t)rd16(ROAD_X_LINES + 2 * line) >> 6;
-    int32_t scaled = (int32_t)(int16_t)rd16(obj + OBJ_LANE) * (int16_t)line;
-    int16_t offset = (int16_t)(scaled / 0xBF);
-    offset += offset >= 0 ? 4 : -4;
-    wr16(obj + OBJ_SCREEN_X, (uint16_t)(centre + offset + 0x120));
+    wr16(obj + OBJ_SCREEN_X, (uint16_t)(road_centre(obj) + lane_offset(obj, 0xBF) + 0x120));
 }
 
 /* Y += VY; screen y = Y + $F0 ($70D0) */
@@ -615,6 +624,103 @@ static void obj_pause(uint32_t obj)
     }
 }
 
+/* Ordinary roadside scenery ($713A); counts a hit when passed too close. */
+#define ROM_SCENERY_WIDTHS 0x00D3BC
+static void obj_scenery(uint32_t obj)
+{
+    if (!rd16(OBJECTS_FROZEN)) {
+        int16_t x;
+        if (!rd16(0xFF0666) && (int16_t)rd16(obj + OBJ_Z) >= 0x71) {
+            int16_t width = (int16_t)rd16(ROM_SCENERY_WIDTHS + (int16_t)((rd8(obj + OBJ_SPRITE_SET) - 0xE) * 2));
+            int16_t gap = (int16_t)(rd16(obj + OBJ_SCREEN_X) - 0x120);
+            if (gap < 0) gap = (int16_t)-gap;
+            if (gap <= width)
+                wr16(0xFF0656, rd16(0xFF0656) + 1);
+        }
+        if (obj_passed(obj)) {
+            obj_free(obj);
+            return;
+        }
+        obj_project_distance(obj);
+        x = (int16_t)(road_centre(obj) + lane_offset(obj, 0xE0) + 0x120);
+        wr16(obj + OBJ_SCREEN_X, (uint16_t)x);
+        obj_pick_sprite(obj, ROM_DEPTH_SPRITES_NEAR);
+    }
+    {
+        int16_t x = (int16_t)rd16(obj + OBJ_SCREEN_X);
+        if (x > 0x40 && x < 0x200)
+            obj_add_to_layer(obj);
+    }
+}
+
+/*
+ * Continue countdown ($713E): sets up the screen, then counts down 12 frames
+ * per step, blinking; a button or the end of the count leaves for mode $34.
+ */
+#define CD_STATE    0x3E
+#define CD_HOLD     0x3C
+#define CD_TICK     0x3A
+static void obj_continue_countdown(uint32_t obj)
+{
+    uint16_t state = rd16(obj + CD_STATE);
+    uint8_t pressed;
+    if (state == 0) {
+        wr16(0xFFC9C0, 0);              /* free objects 3-5 */
+        wr16(0xFFCA00, 0);
+        wr16(0xFFCA40, 0);
+        wr16(0xFFC8A8, 0xFFFF);
+        wr32(0xFFC7D0, 0x0000B2EA);     /* stream this screen's tiles */
+        wr16(0xFFC7CC, 1);
+        wr16(0xFFC7CE, 0);
+        wr8(obj + OBJ_SPRITE_SET, 0x1E);
+        wr16(obj + CD_STATE, 1);
+        return;
+    }
+    if (state == 1) {
+        uint8_t t = (uint8_t)(rd8(obj + OBJ_SPRITE_SET) - 1);
+        wr8(obj + OBJ_SPRITE_SET, t);
+        if (t)
+            return;
+        wr16(obj + OBJ_SCREEN_X, 0xE0);
+        wr16(obj + OBJ_SCREEN_Y, 0xE0);
+        wr16(obj + OBJ_SPRITE_MAP, 0x3A58);
+        wr8(obj + OBJ_SPRITE_SET, 0);
+        wr16(obj + CD_STATE, 2);
+        return;
+    }
+    /* The original reads the command from ROM address $B1 (move.b ($B1).w
+       instead of an immediate), which sends command 0. Kept as is. */
+    sound_command(rd8(0x0000B1));
+    pressed = rd8(PAD1_PRESSED);
+    if ((pressed & 0x80) || (pressed & 0x70)) {
+        wr16(0xFFC720, 0x34);
+        return;
+    }
+    if (rd16(obj + CD_HOLD)) {
+        uint16_t h = rd16(obj + CD_HOLD) - 1;
+        wr16(obj + CD_HOLD, h);
+        if (h) {
+            obj_add_to_layer(obj);
+        } else {
+            wr16(0xFFC720, 0x34);
+        }
+        return;
+    }
+    {
+        int16_t tick = (int16_t)(rd16(obj + CD_TICK) - 1);
+        wr16(obj + CD_TICK, (uint16_t)tick);
+        if (tick < 0) {
+            uint8_t step = (uint8_t)(rd8(obj + OBJ_SPRITE_SET) + 1);
+            wr16(obj + CD_TICK, 0x0C);
+            wr8(obj + OBJ_SPRITE_SET, step);
+            if (step >= 0x0D)
+                wr16(obj + CD_HOLD, 0x1E);
+        }
+    }
+    if (rd8(obj + OBJ_SPRITE_SET) & 1)
+        obj_add_to_layer(obj);
+}
+
 /* Handlers by index; NULL ones still run recompiled. */
 static void (*const handlers[25])(uint32_t obj) = {
     [(0x710A - 0x710A) / 4] = obj_debris,
@@ -626,6 +732,8 @@ static void (*const handlers[25])(uint32_t obj) = {
     [(0x712E - 0x710A) / 4] = obj_sign,
     [(0x7132 - 0x710A) / 4] = obj_approacher,
     [(0x7136 - 0x710A) / 4] = obj_start_lights,
+    [(0x713A - 0x710A) / 4] = obj_scenery,
+    [(0x713E - 0x710A) / 4] = obj_continue_countdown,
     [(0x711E - 0x710A) / 4] = obj_blinker,
     [(0x714A - 0x710A) / 4] = obj_line_marker,
     [(0x7152 - 0x710A) / 4] = obj_column_stopper,
