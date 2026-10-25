@@ -150,12 +150,10 @@ static void upload_sprites(void)       /* $8238 */
     z80_bus_release();
 }
 
-static void upload_palette(void)       /* $8464 */
+/* The palette buffer to CRAM by DMA ($846C; an optional delay loop
+   before it only affects timing). */
+static void palette_dma(void)
 {
-    if (!(rd8(PALETTE_DIRTY) & 1))
-        return;
-    wr8(PALETTE_DIRTY, rd8(PALETTE_DIRTY) & ~1);
-    /* $846C: an optional delay loop (timing only) precedes the transfer */
     z80_bus_request();
     dma_enable();
     wr32(VDP_CTRL, 0x94009340);                 /* $40 words */
@@ -164,6 +162,21 @@ static void upload_palette(void)       /* $8464 */
     dma_start(0xC0000080);                      /* to CRAM 0 */
     dma_disable();
     z80_bus_release();
+}
+
+void palette_dma_68k(void)
+{
+    palette_dma();
+    set_dn(4, 2, vdp_mode2() & ~0x10);
+    f_logic(2, 0);
+}
+
+static void upload_palette(void)       /* $8464 */
+{
+    if (!(rd8(PALETTE_DIRTY) & 1))
+        return;
+    wr8(PALETTE_DIRTY, rd8(PALETTE_DIRTY) & ~1);
+    palette_dma();
 }
 
 /* A queued transfer: command, source, length, pending flag ($F86E). */

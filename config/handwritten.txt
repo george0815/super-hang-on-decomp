@@ -70,3 +70,7 @@
 007FAA  vram_copy16_68k
 00F330  stage_graphics_load_68k
 00F448  race_init_68k
+00846C  palette_dma_68k
+007B38  course_select_input_68k
+007B82  course_select_colours_68k
+006E28  sound_driver_load_68k

@@ -188,3 +188,49 @@ static void vram_copy16(uint32_t read_cmd, uint32_t write_cmd)
 }
 
 void vram_copy16_68k(void) { vram_copy16(cpu.d[7], cpu.d[6]); }
+
+/* ------------------------------------------------------ course select */
+
+#define COURSE           0xFF060C
+#define PAD1_PRESSED     0xFFC707
+
+/* Start or C: on to the next mode; left/up and right/down pick one of
+   the four courses ($7B38). */
+static void course_select_input(void)
+{
+    uint8_t p = rd8(PAD1_PRESSED);
+    int d;
+    if (p & 0xA0) {
+        wr16(0xFFC722, 0);
+        wr16(0xFFC704, 0x0C);
+        return;
+    }
+    if (p & 0x05)
+        d = -1;
+    else if (p & 0x0A)
+        d = 1;
+    else
+        return;
+    wr16(COURSE, (uint16_t)((rd16(COURSE) + d) & 3));
+}
+
+void course_select_input_68k(void)
+{
+    uint8_t p = rd8(PAD1_PRESSED);
+    course_select_input();
+    if (!(p & 0xA0))
+        cpu.d[1] = (p & 0x05) ? 0xFFFFFFFF : 1;
+}
+
+/* The four course names in their colours, the selected one flashing
+   white every 8 frames ($7B82). */
+static void course_select_colours(void)
+{
+    wr8(VDP_PALETTE_DIRTY, rd8(VDP_PALETTE_DIRTY) | 1);
+    wr32(0xFFD398, rd32(0x007BB4));
+    wr32(0xFFD39C, rd32(0x007BB8));
+    if (rd8(FRAME_COUNTER_BYTE) & 8)
+        wr16(0xFFD398 + 2 * rd16(COURSE), 0x0ECA);
+}
+
+void course_select_colours_68k(void) { course_select_colours(); }
