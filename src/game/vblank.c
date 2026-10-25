@@ -407,6 +407,132 @@ static void hud_time(void)             /* $C142 */
     hud_big_digits(0x52240003, rd8(SOUND_LOCKED) ? 0xFF054C : 0xFF0554);
 }
 
+/* Every fourth VBlank (every one while the sound is locked). */
+static int hud_type_turn(void)
+{
+    if (rd8(SOUND_LOCKED))
+        return 1;
+    wr16(0xFFC71E, (rd16(0xFFC71E) + 1) & 3);
+    return rd16(0xFFC71E) == 0;
+}
+
+/* Type a line of text one tile per turn from ROM ($DDD0). */
+static void hud_type_line(void)
+{
+    uint16_t i;
+    if (!hud_type_turn())
+        return;
+    i = rd16(0xFFC710);
+    wr32(VDP_CTRL, vram_write_command((uint16_t)(0xD386 + i)));
+    wr16(VDP_DATA, rd16(0x00DE28 + i));
+    wr16(0xFFC710, i + 2);
+    if (rd16(0xFFC710) == 0x42) {
+        wr16(HUD_TASK, rd16(HUD_TASK) + 1);
+        wr16(0xFFC710, 0);
+        wr16(0xFFC712, 0);
+        wr16(0xFFC714, 0);
+        wr16(0xFFC71E, 0);
+    }
+}
+
+/*
+ * Type the ranking table one tile per turn ($DE74): seven rows of fields
+ * (widths 4, 8, 4, 4 tiles from ROM columns, then an 8-tile column block
+ * written down when present), from the entries at the pointer $FFC716.
+ * Blank tiles (no pattern) are skipped.
+ */
+static void hud_type_table(void)
+{
+    uint32_t src = rd32(0xFFC716), cmd;
+    uint16_t field;
+    if (!hud_type_turn())
+        goto done;
+    field = rd16(0xFFC714);
+    cmd = vram_write_command((uint16_t)(0xD486 + (rd16(0xFFC712) << 8) +
+                                        rd16(0x00DE6A + 2 * field) + 2 * rd16(0xFFC710)));
+    if (field == 4) {
+        if (rd32(src + 4)) {
+            int k;
+            for (k = 0; k < 8; k++, cmd += 0x20000, src += 2) {
+                uint16_t t = rd16(src);
+                wr32(VDP_CTRL, cmd);
+                if (t & 0x7FF)
+                    wr16(VDP_DATA, t);
+            }
+        } else {
+            src += 0x10;
+        }
+        wr16(0xFFC714, 0);
+        wr16(0xFFC712, rd16(0xFFC712) + 1);
+        if (rd16(0xFFC712) >= 7 && rd16(0xFFC8AA) != 1)
+            wr16(HUD_TASK, rd16(HUD_TASK) + 1);
+    } else {
+        uint16_t t = rd16(src);
+        src += 2;
+        wr32(VDP_CTRL, cmd);
+        if (t & 0x7FF)
+            wr16(VDP_DATA, t);
+        wr16(0xFFC710, rd16(0xFFC710) + 1);
+        if (rd16(0x00DF56 + 2 * field) == rd16(0xFFC710)) {
+            wr16(0xFFC710, 0);
+            wr16(0xFFC714, field + 1);
+            if (rd16(0xFFC712) == 7 && field + 1 == 2)
+                wr16(HUD_TASK, rd16(HUD_TASK) + 1);
+        }
+    }
+done:
+    wr32(0xFFC716, src);
+}
+
+/* Give `count` name table entries, 2 bytes apart from `cmd`, priority
+   (read back each one, keep it if it has a pattern) ($E016). */
+static void hud_highlight(uint32_t cmd, int count)
+{
+    int k;
+    for (k = 0; k < count; k++, cmd += 0x20000) {
+        uint16_t t;
+        cmd &= ~0x40000000u;
+        wr32(VDP_CTRL, cmd);
+        t = rd16(VDP_DATA) & 0x7FF;
+        if (t) {
+            cmd |= 0x40000000u;
+            wr32(VDP_CTRL, cmd);
+            wr16(VDP_DATA, t | 0x8000);
+        }
+    }
+}
+
+/*
+ * Ranking: highlight the new entry's row, or keep drawing the name entry
+ * line: the letter row with the cursor letter highlighted, the score and
+ * the four letters entered so far ($DF5E).
+ */
+static void hud_name_entry(void)
+{
+    uint16_t mode = rd16(0xFFC8AA), cursor;
+    uint32_t name;
+    int k;
+    if (mode < 2) {
+        if (mode == 1)
+            hud_highlight(0x5B860003, 0x0E);
+        wr16(HUD_TASK, rd16(HUD_TASK) + 1);
+        return;
+    }
+    vdp_copy(0x518C0003, 0x00E086, 0x17);
+    vdp_copy(0x5B880003, 0x00E04C, 0x1D);
+    wr32(VDP_CTRL, 0x51BE0003);
+    bcd_digits(0xFF0582, rd8(0xFF03CC), 0xC0);
+    write_words(0xFF0582, 2);
+    name = rd32(0xFFC8B0);
+    wr32(VDP_CTRL, rd32(0xFFC8AC));
+    for (k = 0; k < 4; k++)
+        wr16(VDP_DATA, char_tile(rd8(name + k)));
+    cursor = (uint16_t)(rd16(0xFF03C2) * 2);
+    wr32(VDP_CTRL, 0x5B880003 + ((uint32_t)cursor << 16));
+    wr16(VDP_DATA, (rd16(0x00E04C + cursor) & 0x7FF) | 0xC000);
+    hud_highlight(rd32(0xFFC8AC) - 0x2A0000, 0x23);
+}
+
 /* HUD setup sequence, one step per VBlank ($DD38). */
 static void hud_tasks(void)
 {
@@ -426,9 +552,9 @@ static void hud_tasks(void)
         if (rd8(SOUND_LOCKED))
             vdp_copy(0x519A0003, ROM_HUD_TEXT_2, 13);
         break;
-    case 3: call68k(f_00DD50); break;
-    case 4: call68k(f_00DD54); break;
-    case 5: call68k(f_00DD58); break;
+    case 3: hud_type_line(); break;
+    case 4: hud_type_table(); break;
+    case 5: hud_name_entry(); break;
     default: break;
     }
 }
