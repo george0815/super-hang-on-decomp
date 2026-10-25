@@ -15,8 +15,19 @@ long verify_failures;
 typedef struct { uint8_t kind, width; uint32_t addr, value; } Access;
 
 static Access io[MAX_IO];
-static int nio, iopos, io_overflow, io_mismatch, tainted, in_hblank;
+static int nio, iopos, io_mismatch, in_hblank;
 static char mismatch_msg[160];
+
+/*
+ * Checks nest: a handwritten function called while an outer original is
+ * running is checked on its own too (its hardware accesses are a slice of
+ * the outer's log). An interrupt or a full log spoils every check running
+ * at the time; each check compares the epochs before and after.
+ */
+#define MAX_DEPTH 16
+static int depth;
+static unsigned long taint_epoch, overflow_epoch;
+static uint8_t ram_before_buf[MAX_DEPTH][0x10000], ram_after_buf[MAX_DEPTH][0x10000];
 
 static struct {
     uint32_t addr;
@@ -71,7 +82,7 @@ int verify_hw_read(int width, uint32_t addr, uint32_t *value)
 void verify_hw_log_read(int width, uint32_t addr, uint32_t value)
 {
     if (verify_mode != VERIFY_ORIGINAL || in_hblank) return;
-    if (nio == MAX_IO) { io_overflow = 1; return; }
+    if (nio == MAX_IO) { overflow_epoch++; return; }
     io[nio++] = (Access){ 'R', (uint8_t)width, addr, value };
 }
 
@@ -80,7 +91,7 @@ int verify_hw_write(int width, uint32_t addr, uint32_t value)
     if (verify_mode == VERIFY_ORIGINAL && in_hblank)
         return 0;
     if (verify_mode == VERIFY_ORIGINAL) {
-        if (nio == MAX_IO) io_overflow = 1;
+        if (nio == MAX_IO) overflow_epoch++;
         else io[nio++] = (Access){ 'W', (uint8_t)width, addr, value };
         return 0;   /* and perform it */
     }
@@ -114,9 +125,9 @@ void verify_interrupt(int level)
     if (level == 4)
         in_hblank = 1;
     else {
-        if (!tainted && getenv("VERIFY_TAINT"))
+        if (getenv("VERIFY_TAINT"))
             fprintf(stderr, "taint: level %d at icount %llu\n", level, (unsigned long long)m68k_icount);
-        tainted = 1;
+        taint_epoch++;
     }
 }
 
@@ -157,7 +168,6 @@ static uint32_t reg_part(const M68kState *s, int bit)
 void verify_call(uint32_t addr, const char *name, void (*original)(void),
                  void (*handwritten)(void), uint64_t outputs)
 {
-    static uint8_t ram_before[0x10000], ram_after[0x10000];
     M68kState cpu_before, cpu_after;
     uint64_t icount, icount_event;
     int64_t cycles, cycles_event;
@@ -165,18 +175,30 @@ void verify_call(uint32_t addr, const char *name, void (*original)(void),
     long n;
     char msg[256] = "";
     uint32_t sp, stack_lo;
-    int bit;
+    int bit, outer_mode, io_start, io_end, level;
+    unsigned long taint0, overflow0;
+    uint8_t *ram_before, *ram_after;
 
     if (verify_mode == VERIFY_SHADOW) { handwritten(); return; }
-    if (!verify_enabled || verify_mode == VERIFY_ORIGINAL || k < 0) { original(); return; }
+    if (!verify_enabled || k < 0 || depth == MAX_DEPTH) { original(); return; }
 
     n = ++stats[k].calls;
     /* sample: every call at first, then a spread */
     if (n > 2000 && n % 97 && !stats[k].all) { original(); return; }
 
-    memcpy(ram_before, m68k_ram, sizeof ram_before);
+    outer_mode = verify_mode;
+    if (outer_mode != VERIFY_ORIGINAL) {   /* outermost check: a fresh log */
+        nio = 0;
+        in_hblank = 0;
+    }
+    io_start = nio;
+    level = depth++;
+    ram_before = ram_before_buf[level];
+    ram_after = ram_after_buf[level];
+    memcpy(ram_before, m68k_ram, 0x10000);
     cpu_before = cpu;
-    nio = iopos = io_overflow = io_mismatch = tainted = in_hblank = 0;
+    taint0 = taint_epoch;
+    overflow0 = overflow_epoch;
 
     verify_mode = VERIFY_ORIGINAL;
     {
@@ -184,27 +206,33 @@ void verify_call(uint32_t addr, const char *name, void (*original)(void),
         original();
         if (getenv("VERIFY_TAINT") && stats[k].all && n < 20)
             fprintf(stderr, "%s call %ld: %llu instructions%s\n", name, n,
-                    (unsigned long long)(m68k_icount - start), tainted ? " (interrupted)" : "");
+                    (unsigned long long)(m68k_icount - start), taint_epoch != taint0 ? " (interrupted)" : "");
     }
-    verify_mode = VERIFY_OFF;
+    verify_mode = outer_mode;
+    depth--;
 
-    if (tainted || io_overflow) {   /* interrupted: not a pure function of its inputs */
+    if (taint_epoch != taint0 || overflow_epoch != overflow0) {
+        /* interrupted: not a pure function of its inputs */
         stats[k].skipped++;
         return;
     }
-    memcpy(ram_after, m68k_ram, sizeof ram_after);
+    io_end = nio;
+    memcpy(ram_after, m68k_ram, 0x10000);
     cpu_after = cpu;
     icount = m68k_icount; icount_event = m68k_icount_event;
     cycles = m68k_cycles; cycles_event = m68k_cycles_event;
 
-    /* shadow run from the same starting point; no interrupts, no timing */
-    memcpy(m68k_ram, ram_before, sizeof ram_before);
+    /* shadow run from the same starting point; no interrupts, no timing;
+       hardware reads are served from this call's slice of the log */
+    memcpy(m68k_ram, ram_before, 0x10000);
     cpu = cpu_before;
     m68k_icount_event = UINT64_MAX;
     m68k_cycles_event = INT64_MAX;
+    iopos = io_start;
+    io_mismatch = 0;
     verify_mode = VERIFY_SHADOW;
     handwritten();
-    verify_mode = VERIFY_OFF;
+    verify_mode = outer_mode;
 
     stats[k].checked++;
     sp = cpu_before.a[7];
@@ -213,8 +241,9 @@ void verify_call(uint32_t addr, const char *name, void (*original)(void),
 
     if (io_mismatch)
         snprintf(msg, sizeof msg, "%s", mismatch_msg);
-    else if (iopos != nio)
-        snprintf(msg, sizeof msg, "made %d of the original's %d hardware accesses", iopos, nio);
+    else if (iopos != io_end)
+        snprintf(msg, sizeof msg, "made %d of the original's %d hardware accesses",
+                 iopos - io_start, io_end - io_start);
     else if (cpu.a[7] != cpu_after.a[7])
         snprintf(msg, sizeof msg, "sp = %08X, original %08X", cpu.a[7], cpu_after.a[7]);
     else if (cpu.ret != cpu_after.ret)
@@ -257,11 +286,12 @@ void verify_call(uint32_t addr, const char *name, void (*original)(void),
             fprintf(stderr, "verify %s ($%06X) call %ld: %s\n", name, addr, n, msg);
     }
 
-    /* continue with the original's results */
-    memcpy(m68k_ram, ram_after, sizeof ram_after);
+    /* continue with the original's results (and an outer check's log) */
+    memcpy(m68k_ram, ram_after, 0x10000);
     cpu = cpu_after;
     m68k_icount = icount; m68k_icount_event = icount_event;
     m68k_cycles = cycles; m68k_cycles_event = cycles_event;
+    nio = io_end;
 }
 
 void verify_report(void)
@@ -272,4 +302,16 @@ void verify_report(void)
     for (i = 0; i < nstats; i++)
         printf("%-28s %8ld %8ld %8ld %8ld\n", stats[i].name, stats[i].calls, stats[i].checked,
                stats[i].skipped, stats[i].failed);
+    /* functions that ran but could not be compared even once (every call
+       was interrupted, e.g. waits): their code is only covered indirectly */
+    {
+        int any = 0;
+        for (i = 0; i < nstats; i++)
+            if (stats[i].calls && !stats[i].checked) {
+                printf("%s%s", any ? " " : "never checked: ", stats[i].name);
+                any = 1;
+            }
+        if (any)
+            printf("\n");
+    }
 }

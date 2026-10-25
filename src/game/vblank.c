@@ -1001,6 +1001,44 @@ void vblank_race(void)                 /* $E906 */
    Only for functions that recompiled code outside this file still calls.
    Results follow tools/flow.py's view of what those callers read. */
 
+/*
+ * The VBlank interrupt ($6D2A): the handler for the current mode
+ * ($FFC722: 0 none, 4 menus, 8 race), then the VBlank count for waits.
+ * The registers are saved on the 68000 stack like the original does, so
+ * RAM matches; the adapter returns from the exception.
+ */
+static void vblank_entry(void)
+{
+    uint32_t sp = cpu.a[7];
+    int n;
+    for (n = 14; n >= 0; n--) {            /* movem.l d0-d7/a0-a6,-(sp) */
+        sp -= 4;
+        wr32(sp, n < 8 ? cpu.d[n] : cpu.a[n - 8]);
+    }
+    cpu.a[7] = sp;
+    switch (rd16(0xFFC722)) {
+    case 0: break;
+    case 4: vblank_menu(); break;
+    case 8: vblank_race(); break;
+    default:
+        push32(0);
+        m68k_dispatch(0x006D42 + rd16(0xFFC722));
+        break;
+    }
+    wr16(0xFF0500, rd16(0xFF0500) + 1);
+    for (n = 0; n < 15; n++, sp += 4) {    /* movem.l (sp)+,d0-d7/a0-a6 */
+        if (n < 8) cpu.d[n] = rd32(sp);
+        else cpu.a[n - 8] = rd32(sp);
+    }
+    cpu.a[7] = sp;
+}
+
+void vblank_entry_68k(void)
+{
+    vblank_entry();
+    set_sr(pop16());                        /* rte; the wrapper pops the pc */
+}
+
 void vblank_menu_68k(void) { vblank_menu(); }
 void vblank_race_68k(void) { vblank_race(); }
 
