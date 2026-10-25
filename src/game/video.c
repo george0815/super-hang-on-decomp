@@ -110,6 +110,24 @@ void vdp_init_registers_68k(void)
 
 /* ------------------------------------------------------------- more */
 
+/*
+ * The low n hex digits of a value as name table entries, base << 8 plus
+ * the digit, plus $614 once shown: leading zeros stay blank unless shown
+ * is set, the last digit always shows ($C16C/$C176/$C180/$C184).
+ */
+void hex_tiles(uint32_t dst, uint32_t v, int n, uint16_t base, int shown)
+{
+    int k;
+    base = (uint16_t)(base << 8);
+    for (k = 0; k < n; k++) {
+        uint16_t digit = v >> (4 * (n - 1 - k)) & 0xF;
+        if (digit || k == n - 1)
+            shown = 1;
+        wr16(dst + 2 * k, (uint16_t)(digit + base + (shown ? 0x614 : 0)));
+    }
+}
+
+
 /* The first $310 words of VRAM (the logo's tiles) from a0 ($7FE8). */
 void vdp_logo_tiles(uint32_t src)
 {

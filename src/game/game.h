@@ -47,6 +47,7 @@ void vdp_copy_rect(uint32_t command, uint32_t src, int width, int height);
 void vdp_logo_tiles(uint32_t src);
 void vdp_map_rows(uint16_t add);
 uint32_t palette_load(uint32_t rec);
+void hex_tiles(uint32_t dst, uint32_t v, int n, uint16_t base, int shown);
 
 /* ------------------------------------------------------------ unpack.c */
 uint32_t rle_unpack(uint32_t src, uint32_t dst, uint32_t *src_end);

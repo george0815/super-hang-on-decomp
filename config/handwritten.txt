@@ -74,3 +74,5 @@
 007B38  course_select_input_68k
 007B82  course_select_colours_68k
 006E28  sound_driver_load_68k
+00BF98  time_record_tiles_68k
+00DB5E  ranking_rows_68k
