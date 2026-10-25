@@ -73,12 +73,13 @@ replay: build/replay
 	build/replay $(ROM) build/ref/race.events build/ref/race.vtrace
 
 # replay every recorded session (tools/record.sh) with each handwritten
-# function checked against its original
+# function checked against its original; VERIFY_ALL=0 samples long runs
 RECORDINGS ?= $(patsubst build/ref/%.events,%,$(wildcard build/ref/*.events))
+VERIFY_ALL ?= 1
 verify: build/replay
 	@for r in $(RECORDINGS); do \
 	    echo "== $$r"; \
-	    build/replay $(ROM) build/ref/$$r.events build/ref/$$r.vtrace --verify || exit 1; \
+	    VERIFY_ALL=$(VERIFY_ALL) build/replay $(ROM) build/ref/$$r.events build/ref/$$r.vtrace --verify || exit 1; \
 	done
 
 report: check

@@ -7,6 +7,7 @@
 #define GAME_MODE        0xFFC704
 #define MODE_RACE        0x14
 #define HUD_HIDDEN       0xFFC82C
+#define OBJECTS_FROZEN   0xFFC756
 #define COURSE_PROGRESS  0xFF0616   /* distance along the course */
 #define STAGE            0xFF060A
 #define OBJECTS          0xFFC900
@@ -1336,3 +1337,520 @@ void load_turn_script_68k(void)    { load_turn_script(); }
 void load_event_script_68k(void)   { load_event_script(); }
 void load_scenery_script_68k(void) { load_scenery_script(); }
 void stage_record_68k(void)        { cpu.a[0] = stage_record(rd16(STAGE)); }
+
+/* ------------------------------------------------- per-frame helpers */
+
+#define FRAME_COUNTER_BYTE 0xFFC726
+
+/* Flash two palette entries grey every other frame pair ($8D0C). */
+static void flash_colours(void)
+{
+    uint32_t c = 0x444;
+    if (rd8(FRAME_COUNTER_BYTE) & 2)
+        c = c << 16 | c >> 16;
+    wr32(0xFFD3B0, c);
+    wr32(0xFFD3D0, c);
+}
+
+void flash_colours_68k(void) { flash_colours(); }
+
+/*
+ * Original mode: count the parts worn out (six wear words at $FFB648,
+ * negative = broken) and flag a change; the fourth one breaking first
+ * also starts a warning ($8DE6).
+ */
+#define PART_WEAR        0xFFB648
+static void parts_check(void)
+{
+    uint16_t broken = 0;
+    int k;
+    if (!rd16(HUD_HIDDEN))
+        return;
+    if ((int16_t)rd16(PART_WEAR + 6) < 0 && !rd16(0xFFC8A0)) {
+        wr16(0xFFC8A2, 4);
+        wr16(0xFFC8A4, 0x31);
+        wr16(0xFFC8A0, 1);
+    }
+    for (k = 0; k < 6; k++)
+        if ((int16_t)rd16(PART_WEAR + 2 * k) < 0)
+            broken++;
+    if (broken != rd16(0xFFC896)) {
+        wr16(0xFFC896, broken);
+        wr16(0xFFC89A, rd16(0xFFC89A) + 1);
+    }
+}
+
+void parts_check_68k(void)
+{
+    parts_check();
+    if (rd16(HUD_HIDDEN))
+        cpu.d[1] = 0xFFFF;        /* moveq #5,d1 run out by dbf */
+}
+
+/*
+ * After a stage change, point the road at the new stage's geometry, or at
+ * the goal straight ($744F0) when the course is finished ($E2EC).
+ */
+#define ROM_STAGE_GEOMETRY 0x00FA6E
+static uint16_t geometry_d0, geometry_d1;
+static void stage_geometry(void)
+{
+    if (!rd16(0xFF0610))
+        return;
+    wr32(TRACK_GEOMETRY, 0x0744F0);
+    if (!rd8(0xFF06C5)) {
+        geometry_d1 = (uint16_t)(rd16(STAGE) * 2);
+        geometry_d0 = (uint16_t)(rd16(STAGE_DATA_INDEX + rd16(COURSE) * 18 + geometry_d1) * 4);
+        wr32(TRACK_GEOMETRY, rd32(ROM_STAGE_GEOMETRY + geometry_d0));
+        set_dn(0, 2, geometry_d0);
+        set_dn(1, 2, geometry_d1);
+    }
+    wr16(0xFF0610, 0);
+    wr8(0xFF06C5, 0);
+}
+
+void stage_geometry_68k(void) { stage_geometry(); }
+
+/*
+ * Background hill columns ($EA46): twelve layers take a height from the
+ * road state (stride 16 at $FF0DC8, >> 9). When one changes, a 20-byte
+ * column of tile words is picked from a per-layer table at $FFE100
+ * (stride $AA) by the height and direction of the change, or a blank
+ * column from ROM, and staged with its size and VRAM offset for the
+ * VBlank upload (records of $18 bytes from $FF094A).
+ */
+#define HILL_HEIGHTS     0xFF0930
+#define HILL_SOURCE      0xFF0DC8
+#define HILL_UPLOADS     0xFF094E
+#define HILL_TABLES      0xFFE100
+#define ROM_HILL_BLANK   0x00EB02
+static int hill_loaded;
+static uint32_t hill_d1, hill_d4;   /* registers left by the last copy */
+static uint16_t hill_last;
+static int hill_changed;            /* the last layer changed */
+static void hill_columns(void)
+{
+    uint32_t heights = HILL_HEIGHTS, src = HILL_SOURCE, up = HILL_UPLOADS, table = HILL_TABLES;
+    uint16_t vram = 0xEE00;
+    int k, i;
+    hill_loaded = 0;
+    for (k = 0; k < 12; k++, src += 0x10, up += 0x18, table += 0xAA, vram += 0x80) {
+        uint16_t now = (uint16_t)((int16_t)rd16(src) >> 9);
+        uint16_t old = rd16(heights + 2 * k), diff, d1;
+        uint32_t col;
+        int blank;
+        wr16(heights + 2 * k, now);
+        hill_last = now;
+        hill_changed = old != now;
+        if (!hill_changed)
+            continue;
+        diff = (uint16_t)(old - now);
+        if ((int16_t)diff < 0) diff = (uint16_t)-diff;
+        wr16(up - 4, diff);
+        /* rising (old above now, same sign) or falling */
+        if (((int16_t)old < 0) == ((int16_t)now < 0) ? old >= now : (int16_t)now < 0) {
+            col = table + 0x94;
+            d1 = (uint16_t)(-2 * now - 2 * diff);
+            blank = (int16_t)d1 >= 0 && d1 >= 4;
+        } else {
+            col = table + 0x14;
+            d1 = (uint16_t)(-2 * now);
+            blank = (int16_t)d1 < 0 && d1 < 0xFFEC;
+        }
+        col = blank ? ROM_HILL_BLANK : col + (int16_t)d1;
+        wr16(up - 2, (uint16_t)((d1 & 0x7E) | vram));
+        for (i = 0; i < 20; i += 4)
+            wr32(up + i, rd32(col + i));
+        hill_loaded = 1;
+        hill_d1 = rd32(col + 4);
+        hill_d4 = rd32(col + 16);
+    }
+}
+
+void hill_columns_68k(void)
+{
+    hill_columns();
+    if (hill_loaded)
+        cpu.d[1] = hill_d1, cpu.d[4] = hill_d4;
+    if (!hill_changed)
+        set_dn(1, 2, hill_last);  /* the last layer's height stays in d1 */
+}
+
+/*
+ * Road line tables for the scroll code ($EFA8):
+ *  - $FF0F80..$FF107E: each road line's height (>> 4) plus 8 per line,
+ *    filled from the bottom;
+ *  - $FF1300: for each screen row, the odd road line index (2 * line + 1)
+ *    drawn there, found by walking the road heights from the near end;
+ *    rows the road climbs back over (hills) are filled backwards, and the
+ *    last such row is noted at ROAD_HIDDEN_FROM for the line marker.
+ */
+#define ROAD_Y_LINES     0xFF0F00
+#define ROAD_ROW_LINES   0xFF1300
+#define ROAD_ROWS_BLANK  0xFF0754   /* rows left unfilled at the top */
+#define ROAD_HIDDEN_FROM 0xFF0758   /* word: line, word: row */
+static int road_rows_done;
+static void road_rows(void)
+{
+    uint32_t row;
+    int16_t prev, h;
+    int k, n;
+    road_rows_done = 0;
+    for (k = 0; k < 0xC0; k++)
+        wr16(0xFF107E - 2 * k, (uint16_t)(((int16_t)rd16(0xFF127E - 2 * k) >> 4) + 8 * k));
+    n = 0x80 - (int16_t)rd16(ROAD_ROWS_BLANK);
+    for (k = 0; k < (uint16_t)(n - 1) + 1; k++)
+        wr16(ROAD_ROW_LINES + 2 * k, 0);
+    wr16(ROAD_HIDDEN_FROM, 1);
+    prev = (int16_t)rd16(ROAD_Y_LINES) >> 4;
+    if (prev >= 0 && 0xDF - prev >= 0) {
+        row = ROAD_ROW_LINES + 2 * (0xDF - prev);
+        for (k = 0; k < 0xBF; k++) {
+            uint16_t line = (uint16_t)(2 * k + 1);
+            int16_t d;
+            h = (int16_t)rd16(ROAD_Y_LINES + 2 + 2 * k) >> 4;
+            d = (int16_t)(prev - h);
+            if (d == 0) {
+                wr16(row, line);
+            } else if (d > 0) {
+                while (d--) { row += 2; wr16(row, line); }
+            } else {
+                while (d++) { row -= 2; wr16(row, line); }
+                wr16(ROAD_HIDDEN_FROM, line);
+                wr16(ROAD_HIDDEN_FROM + 2, (uint16_t)row);
+            }
+            prev = h;
+        }
+        road_rows_done = 1;
+    }
+    wr16(ROAD_HIDDEN_FROM, (uint16_t)((int16_t)rd16(ROAD_HIDDEN_FROM) >> 1));
+    wr16(ROAD_HIDDEN_FROM + 2, (uint16_t)((rd16(ROAD_HIDDEN_FROM + 2) & 0x1FF) >> 1));
+}
+
+void road_rows_68k(void)
+{
+    road_rows();
+    set_dn(5, 2, 8);
+    if (road_rows_done)
+        set_dn(1, 2, 0);
+}
+
+/* ---------------------------------------------------------- the clock */
+
+/*
+ * FF0554 holds the clock: time left (BCD), frames until the next second,
+ * frames per second, frames into the current lap second, lap seconds and
+ * hundredths (BCD).
+ */
+#define CLOCK            0xFF0554
+#define ROM_HUNDREDTHS   0x0096BC   /* frame countdown -> hundredths (BCD) */
+#define TOTAL_TIME       0xFFC82E   /* original mode: elapsed time record */
+#define SPLIT_TIMES      0xFFC860   /* original mode: 8 bytes per segment */
+#define SPLIT_INDEX      0xFFC88E
+
+static uint32_t clock_d1;   /* for the adapter */
+static int clock_d1_set;
+
+/* Elapsed time: one frame tick of a minutes/seconds/hundredths record
+   (a byte at +1, +2, +3) with its own frame countdown ($9682). */
+static void clock_tick(uint32_t countdown, uint32_t time, uint8_t fps)
+{
+    wr8(countdown, rd8(countdown) - 1);
+    if (!rd8(countdown)) {
+        uint8_t s;
+        wr8(countdown, fps);
+        s = bcd_add(rd8(time + 2), 1);
+        wr8(time + 2, s);
+        if (s >= 0x60) {
+            wr8(time + 2, 0);
+            wr8(time + 1, bcd_add(rd8(time + 1), 1));
+        }
+        clock_d1 = 1;
+        clock_d1_set = 1;
+    }
+    wr8(time + 3, rd8(ROM_HUNDREDTHS + rd8(countdown)));
+}
+
+/* One frame of the race clock ($9626). */
+static void race_clock(void)
+{
+    uint8_t fps = rd8(CLOCK + 2), frame;
+    clock_d1_set = 0;
+    if (rd16(HUD_HIDDEN)) {
+        uint16_t seg;
+        uint32_t split;
+        if (rd16(OBJECTS_FROZEN))
+            return;
+        clock_tick(CLOCK + 1, TOTAL_TIME, fps);
+        seg = rd16(SPLIT_INDEX);
+        if (seg >= 6 || rd16(0xFFC8B4))   /* unsigned: negative is out too */
+            return;
+        split = SPLIT_TIMES + 8 * seg;
+        clock_tick(0xFFC88C, split, fps);
+        clock_d1 = rd32(split - 4);
+        clock_d1_set = 1;
+        if (rd32(split) >= clock_d1)       /* slower than the previous split */
+            wr16(0xFFC8B4, rd16(0xFFC8B4) + 1);
+        return;
+    }
+    /* arcade: count the time left down, and the lap time up */
+    if ((int8_t)fps < 0)
+        return;
+    wr8(CLOCK + 1, rd8(CLOCK + 1) - 1);
+    if (!rd8(CLOCK + 1)) {
+        wr8(CLOCK + 1, fps);
+        wr8(CLOCK, bcd_sub(rd8(CLOCK), 1));
+    }
+    frame = (uint8_t)(rd8(CLOCK + 3) + 1);
+    wr8(CLOCK + 3, frame);
+    if (frame >= fps) {
+        wr8(CLOCK + 3, 0);
+        wr8(CLOCK + 5, 0);
+        wr8(CLOCK + 4, bcd_add(rd8(CLOCK + 4), 1));
+        return;
+    }
+    {
+        uint8_t hundredths = (uint8_t)(frame * 100u / fps);
+        wr8(CLOCK + 5, (uint8_t)((hundredths / 10 & 0xF) << 4 | (hundredths % 10 & 0xF)));
+        clock_d1 = (uint32_t)(hundredths / 10 & 0xF) << 4;
+        clock_d1_set = 1;
+    }
+}
+
+void race_clock_68k(void)
+{
+    race_clock();
+    if (clock_d1_set)
+        cpu.d[1] = clock_d1;
+}
+
+/* -------------------------------------------------------- checkpoints */
+
+/*
+ * Arcade segment times: per course, an offset into the record area at
+ * $FF0400 and the index of the last segment (ROM_SEGMENT_RECORDS). The
+ * area holds this run's segment times (BCD seconds/hundredths words) and,
+ * $78 bytes on, the best time for each segment.
+ */
+#define CHECKPOINT       0xFF052C   /* checkpoints passed (binary) */
+#define CHECKPOINT_BCD   0xFF052E
+#define SEGMENT_TIME     0xFF0558   /* = CLOCK + 4 */
+#define SEGMENT_RECORDS  0xFF0400
+#define ROM_SEGMENT_RECORDS 0x00E7F8
+#define RUN_TOTAL        0xFF04EC   /* long: 00 MM SS hh */
+#define BEST_TOTALS      0xFF04D8   /* long per course */
+#define DIGIT_VALUE      0xFF04E8   /* long being drawn; word: new record */
+#define DIGIT_BUFFER     0xFF0582
+#define ROM_CHECKPOINTS  0x00FA6A   /* checkpoints per course (bytes) */
+#define ROM_CHECKPOINTS_HIDDEN 0x00FA5E
+#define ROM_EXTEND_TIME  0x010A6E   /* per difficulty, 18 BCD seconds */
+
+/* BCD -> binary for a 4-digit word ($E8DC). */
+static uint16_t bcd_to_bin(uint16_t v)
+{
+    return (uint16_t)((v >> 12 & 0xF) * 1000 + (v >> 8 & 0xF) * 100 + (v >> 4 & 0xF) * 10 + (v & 0xF));
+}
+
+/* Binary -> BCD, five digits ($E8A6). */
+static uint32_t bin_to_bcd(uint16_t v)
+{
+    uint32_t d3 = 0, d0 = v;
+    static const uint16_t div[4] = { 10000, 1000, 100, 10 };
+    int k;
+    for (k = 0; k < 4; k++) {
+        d3 = (d3 & ~0xFFu) | ((d3 | (d0 / div[k])) & 0xFF);
+        d3 <<= 4;
+        d0 %= div[k];
+    }
+    return d3 | d0;
+}
+
+/* Add a 3-byte minutes/seconds/hundredths BCD time to another, seconds
+   wrapping at 60 and the sum capped at 99'59"99 ($E6EC). */
+static void time_add(uint32_t dst, uint32_t src)
+{
+    int x = 0, mid_carry = 0, k;
+    uint8_t s;
+    for (k = 2; k >= 0; k--) {
+        wr8(dst + k, bcd_addx(rd8(dst + k), rd8(src + k), &x));
+        if (k == 1)
+            mid_carry = x;
+    }
+    if (x)
+        goto cap;
+    if (mid_carry) {
+        wr8(dst + 1, bcd_add(rd8(dst + 1), 0x40));   /* 100 -> 60 seconds */
+        return;
+    }
+    s = rd8(dst + 1);
+    if (s < 0x60)
+        return;
+    wr8(dst + 1, bcd_sub(s, 0x60));
+    s = bcd_addx(rd8(dst), 1, &x);
+    if (x)
+        goto cap;
+    wr8(dst, s);
+    return;
+cap:
+    wr32(dst - 1, 0x00995999);
+}
+
+/*
+ * Record the time of the segment just finished ($E6DC). In original mode
+ * the clock is added to a running total; in arcade mode the segment time
+ * is stored, its best kept, and after the last segment the run's total is
+ * summed and compared with the course record.
+ */
+static void segment_record(uint16_t checkpoint)
+{
+    uint32_t course = ROM_SEGMENT_RECORDS + 4 * rd16(COURSE), times, k;
+    uint16_t seg, t, last;
+    uint32_t total, d0;
+    if (rd16(HUD_HIDDEN)) {
+        time_add(0xFFC833, 0xFFC82F);
+        return;
+    }
+    times = SEGMENT_RECORDS + rd16(course);
+    seg = (uint16_t)(checkpoint - 2);
+    t = rd16(SEGMENT_TIME);
+    wr16(times + 2 * seg, t);
+    if (t < rd16(times + 0x78 + 2 * seg))
+        wr16(times + 0x78 + 2 * seg, t);
+    last = rd16(course + 2);
+    if (seg < last)
+        return;
+    /* the run's total: BCD sum of every segment time */
+    wr32(RUN_TOTAL, 0);
+    for (k = 0; k <= last; k++) {
+        uint32_t sum = 0, a = rd32(RUN_TOTAL), b = rd16(times + 2 * k);
+        int x = 0, i;
+        wr32(DIGIT_VALUE, b);
+        for (i = 0; i < 32; i += 8)
+            sum |= (uint32_t)bcd_addx((uint8_t)(a >> i), (uint8_t)(b >> i), &x) << i;
+        wr32(RUN_TOTAL, sum);
+    }
+    /* seconds -> minutes (binary word) and seconds (BCD byte) */
+    total = rd32(RUN_TOTAL) >> 8;
+    d0 = (total & 0xFFFF0000u) | bcd_to_bin((uint16_t)total);
+    if (d0 / 60 <= 0xFFFF)
+        d0 = (d0 % 60) << 16 | (d0 / 60);
+    wr16(RUN_TOTAL, (uint16_t)d0);
+    wr8(RUN_TOTAL + 2, (uint8_t)bin_to_bcd((uint16_t)(d0 >> 16)));
+    total = rd32(RUN_TOTAL);
+    if (total < rd32(BEST_TOTALS + 4 * rd16(COURSE))) {
+        wr32(BEST_TOTALS + 4 * rd16(COURSE), total);
+        wr16(DIGIT_VALUE, 0xFFFF);
+    }
+}
+
+/* Two BCD digits as tiles, the first blank when zero ($BCE2, $BCC8). */
+static uint32_t digit_pair(uint32_t dst, uint8_t v, int blank)
+{
+    uint16_t hi = v >> 4 & 0xF;
+    wr16(dst, blank && !hi ? 0 : hi + 0xA614);
+    wr16(dst + 2, (uint16_t)((v & 0xF) + 0xA614));
+    return dst + 4;
+}
+
+/* A minutes/seconds/hundredths time as tiles with ' and " ($BC66). */
+static void time_tiles(uint32_t time, uint32_t dst)
+{
+    dst = digit_pair(dst, rd8(time), 1);
+    wr16(dst, 0xC63C);
+    dst = digit_pair(dst + 2, rd8(time + 1), 0);
+    wr16(dst, 0xC63D);
+    digit_pair(dst + 2, rd8(time + 2), 0);
+}
+
+/* Six of eight tile words into sprite pieces 6 bytes apart. */
+static void tiles_to_sprites(uint32_t src, uint32_t sprite, const int *pick, int n)
+{
+    int k;
+    for (k = 0; k < n; k++)
+        wr16(sprite + 6 * k, rd16(src + 2 * pick[k]));
+}
+
+/* All eight hex digits of DIGIT_VALUE as tiles ($C184). */
+static void digits_long(uint32_t dst, uint16_t base)
+{
+    uint32_t v = rd32(DIGIT_VALUE);
+    int k;
+    for (k = 0; k < 8; k++)
+        wr16(dst + 2 * k, (uint16_t)((v >> (28 - 4 * k) & 0xF) + (base << 8) + 0x614));
+}
+
+/* An arcade segment time (BCD seconds, hundredths) as digits ($BFEE):
+   seconds past 59 show as a leading 1 minute. */
+static void segment_digits(uint32_t time)
+{
+    uint32_t v = rd8(time);
+    wr32(DIGIT_VALUE, 0);
+    if (v >= 0x60)
+        v = (v - 0x60) | 0x1000;
+    v = (v << 12 & 0xFFFFFF00u) | rd8(time + 1);
+    wr32(DIGIT_VALUE, v);
+    digits_long(DIGIT_BUFFER, 0xA0);
+}
+
+/* Show the time of the checkpoint just passed ($E808). */
+static int checkpoint_d4_set;
+static void checkpoint_times(uint16_t checkpoint)
+{
+    static const int time6[6] = { 0, 1, 3, 4, 6, 7 }, seg5[5] = { 1, 3, 4, 6, 7 };
+    uint32_t course;
+    if (rd16(HUD_HIDDEN)) {
+        time_tiles(0xFFC82F, 0xFFC83E);
+        tiles_to_sprites(0xFFC83E, 0xFFB804, time6, 6);
+        return;
+    }
+    segment_digits(SEGMENT_TIME);
+    tiles_to_sprites(DIGIT_BUFFER, 0xFFB804, seg5, 5);
+    course = ROM_SEGMENT_RECORDS + 4 * rd16(COURSE);
+    segment_digits(SEGMENT_RECORDS + rd16(course) + 0x78 + 2 * (uint16_t)(checkpoint - 2));
+    tiles_to_sprites(DIGIT_BUFFER, 0xFFB822, seg5, 5);
+    checkpoint_d4_set = 1;
+}
+
+/*
+ * Passing a checkpoint ($E5BA): when the race code has counted the sign
+ * (FF06B4 negative), record and show the segment time, add the extended
+ * play time, restart the segment clock and start the "extended play"
+ * object; past the course's last checkpoint the goal mode is selected.
+ */
+static void checkpoint_pass(void)
+{
+    uint16_t cp;
+    uint8_t count, t;
+    checkpoint_d4_set = 0;
+    if (rd16(0xFFC7CA) || (int16_t)rd16(0xFF06B4) >= 0)
+        return;
+    cp = (uint16_t)(rd16(CHECKPOINT) + 1);
+    segment_record(cp);
+    count = rd16(HUD_HIDDEN) ? rd8(ROM_CHECKPOINTS_HIDDEN + rd16(0xFFC85A))
+                             : rd8(ROM_CHECKPOINTS + rd16(COURSE));
+    if ((uint8_t)cp >= count) {
+        wr16(0xFFC720, 0x1C);
+        return;
+    }
+    wr16(CHECKPOINT, cp);
+    wr8(CHECKPOINT_BCD + 1, bcd_add(rd8(CHECKPOINT_BCD + 1), 1));
+    checkpoint_times(cp);
+    wr16(0xFFC7CA, 0xFFFF);
+    wr16(0xFFCA80, 0x20);             /* object 6: extended play */
+    {
+        uint8_t bonus = rd8(ROM_EXTEND_TIME + 18 * rd16(0xFF053A) + (uint16_t)(rd16(CHECKPOINT) - 1));
+        int x = 0;
+        t = bcd_addx(rd8(CLOCK), bonus, &x);
+        wr8(CLOCK, x ? 0x99 : t);
+    }
+    wr16(SEGMENT_TIME, 0);
+    wr32(TOTAL_TIME, 0);
+    wr8(CLOCK + 1, rd8(CLOCK + 2));
+}
+
+void checkpoint_pass_68k(void)
+{
+    checkpoint_pass();
+    if (checkpoint_d4_set)
+        cpu.d[4] = rd32(DIGIT_VALUE);
+}

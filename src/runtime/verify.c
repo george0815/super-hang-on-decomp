@@ -22,6 +22,7 @@ static struct {
     uint32_t addr;
     const char *name;
     long calls, checked, skipped, failed;
+    int all;    /* check every call (VERIFY_ALL) */
 } stats[MAX_FUNCS];
 static int nstats;
 
@@ -33,6 +34,19 @@ static int stat_index(uint32_t addr, const char *name)
     if (nstats == MAX_FUNCS) return -1;
     stats[nstats].addr = addr;
     stats[nstats].name = name;
+    {
+        /* VERIFY_ALL=1, or a comma-separated list of names, turns off the
+           sampling for those functions */
+        const char *all = getenv("VERIFY_ALL");
+        size_t len = strlen(name);
+        const char *p;
+        if (all && !strcmp(all, "1"))
+            stats[nstats].all = 1;
+        else if (all)
+            for (p = strstr(all, name); p; p = strstr(p + 1, name))
+                if ((p == all || p[-1] == ',') && (p[len] == ',' || !p[len]))
+                    stats[nstats].all = 1;
+    }
     return nstats++;
 }
 
@@ -155,7 +169,7 @@ void verify_call(uint32_t addr, const char *name, void (*original)(void),
 
     n = ++stats[k].calls;
     /* sample: every call at first, then a spread */
-    if (n > 2000 && n % 97) { original(); return; }
+    if (n > 2000 && n % 97 && !stats[k].all) { original(); return; }
 
     memcpy(ram_before, m68k_ram, sizeof ram_before);
     cpu_before = cpu;

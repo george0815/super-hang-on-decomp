@@ -35,3 +35,35 @@ void rng_next_68k(void)
     cpu.d[1] = rng_state;
     f_logic(4, rng_state);
 }
+
+/* Packed BCD byte arithmetic as abcd/sbcd do it with X clear (digits
+   outside 0-9 adjust the way the 68000 does). */
+uint8_t bcd_add(uint8_t a, uint8_t b)
+{
+    unsigned lo = (a & 0x0f) + (b & 0x0f);
+    unsigned r = lo + (a & 0xf0) + (b & 0xf0) + (lo > 9 ? 6 : 0);
+    if (r > 0x9f)
+        r -= 0xa0;
+    return (uint8_t)r;
+}
+
+uint8_t bcd_sub(uint8_t a, uint8_t b)
+{
+    unsigned lo = (a & 0x0f) - (b & 0x0f);
+    unsigned adj = lo > 0x0f ? 6 : 0;
+    unsigned r = lo + (a & 0xf0) - (b & 0xf0);
+    if (r > 0xff)
+        r += 0xa0;
+    return (uint8_t)(r - adj);
+}
+
+/* abcd with X in and out. */
+uint8_t bcd_addx(uint8_t a, uint8_t b, int *x)
+{
+    unsigned lo = (a & 0x0f) + (b & 0x0f) + (unsigned)*x;
+    unsigned r = lo + (a & 0xf0) + (b & 0xf0) + (lo > 9 ? 6 : 0);
+    *x = r > 0x9f;
+    if (*x)
+        r -= 0xa0;
+    return (uint8_t)r;
+}

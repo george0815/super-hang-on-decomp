@@ -43,3 +43,10 @@
 00ED32  load_event_script_68k
 00ED3E  load_scenery_script_68k
 00ED4A  stage_record_68k
+008D0C  flash_colours_68k
+008DE6  parts_check_68k
+00E2EC  stage_geometry_68k
+00EA46  hill_columns_68k
+00EFA8  road_rows_68k
+009626  race_clock_68k
+00E5BA  checkpoint_pass_68k
