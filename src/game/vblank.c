@@ -515,6 +515,36 @@ void hud_big_digits_68k(void)          /* $C1B0 */
 }
 
 /* Eight digits, all shown ($C184). */
+/* Eight digits, leading zeros blank ($C180), and four from a word
+   ($C176). */
+void hex_tiles_8_68k(void)
+{
+    uint32_t v = rd32(cpu.a[1]);
+    hex_tiles(cpu.a[0], v, 8, (uint16_t)cpu.d[0], 0);
+    cpu.a[0] += 16;
+    cpu.d[1] = 0xFFFFFFFF;
+    cpu.d[4] = v;
+    cpu.x = 0;
+}
+
+void hex_tiles_4_68k(void)
+{
+    uint16_t v = rd16(cpu.a[1]);
+    hex_tiles(cpu.a[0], v, 4, (uint16_t)cpu.d[0], 0);
+    cpu.a[0] += 8;
+    set_dn(0, 2, (uint16_t)(cpu.d[0] << 8));
+    cpu.d[1] = 0xFFFFFFFF;
+    cpu.d[4] = (cpu.d[4] & 0xFFFF0000u) | v;
+    cpu.x = 0;
+}
+
+/* Display off ($8438). */
+void display_off_68k(void)
+{
+    wr8(VDP_MODE_SHADOW + 3, rd8(VDP_MODE_SHADOW + 3) & ~0x40);
+    wr16(VDP_CTRL, rd16(VDP_MODE_SHADOW + 2));
+}
+
 void hex_tiles_shown_68k(void)
 {
     hex_tiles(cpu.a[0], rd32(cpu.a[1]), 8, (uint16_t)cpu.d[0], 1);

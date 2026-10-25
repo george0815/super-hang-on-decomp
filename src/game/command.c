@@ -60,14 +60,19 @@ static void rect_record(uint32_t rec)
 
 /* A window: left edge, then the 2-cell body stepped a cell at a time
    ($6058). */
-static void window_columns(uint32_t cmd, int steps)
+static void window_frame(uint32_t cmd, int steps, uint32_t left, uint32_t body, int height)
 {
     int k;
-    vdp_copy_rect(cmd, 0x006088, 1, 6);
+    vdp_copy_rect(cmd, left, 1, height);
     for (k = 0; k < steps; k++) {
         cmd += 0x20000;
-        vdp_copy_rect(cmd, 0x006094, 2, 6);
+        vdp_copy_rect(cmd, body, 2, height);
     }
+}
+
+static void window_columns(uint32_t cmd, int steps)
+{
+    window_frame(cmd, steps, 0x006088, 0x006094, 6);
 }
 
 static uint32_t mechanic_text_table(uint32_t normal, uint32_t alt)
@@ -473,4 +478,27 @@ void password_check_68k(void)
     password_check(&hi, &lo);
     set_dn(1, 1, hi);
     set_dn(2, 1, lo);
+}
+
+/* A taller window ($5182). */
+void window_tall_68k(void)
+{
+    uint32_t cmd = cpu.d[7];
+    int steps = (uint16_t)cpu.d[4] + 1;
+    window_frame(cmd, steps, 0x0051B2, 0x0051C0, 7);
+    cpu.d[7] = cmd + 0x20000u * steps + 0x3800000;
+    set_dn(4, 2, 0xFFFF);
+}
+
+/* A 6x6 picture frame ($5FD2). */
+void picture_frame_68k(void)
+{
+    vdp_copy_rect(cpu.d[7], 0x0141C0, 6, 6);
+}
+
+void rect_record_68k(void)
+{
+    rect_record(cpu.a[6]);
+    set_dn(5, 2, 0xFFFF);
+    set_sr(get_sr() & 0xF8FF);
 }

@@ -134,3 +134,9 @@
 0060AC  race_names_68k
 0051DC  password_check_68k
 008BFA  course_graphics_68k
+00C180  hex_tiles_8_68k
+00C176  hex_tiles_4_68k
+008438  display_off_68k
+005182  window_tall_68k
+005FD2  picture_frame_68k
+005622  rect_record_68k
