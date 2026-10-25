@@ -61,9 +61,14 @@ uint16_t char_tile(uint8_t c);
 
 /* ------------------------------------------------------------- race.c */
 void race_place_objects(void);
+void race_turns(void);
+void race_rivals(void);
+void race_input(void);
+void race_sounds(void);
 
 /* ---------------------------------------------------------- objects.c */
 void obj_add_to_layer(uint32_t obj);
 void objects_update(void);
+void score_add(void);
 
 #endif

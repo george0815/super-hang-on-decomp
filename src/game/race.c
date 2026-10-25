@@ -431,3 +431,251 @@ void race_rivals_68k(void)
         cpu.d[5] = rv.d5;
     }
 }
+
+/* --------------------------------------------------------------- input */
+
+#define PAD1_HELD        0xFFC706   /* S A C B R L D U */
+#define THROTTLE_RAMP    0xFFC738
+#define BRAKE_RAMP       0xFFC73A
+#define STEER_RAMP       0xFFC73C
+#define BIKE_THROTTLE    0xFF063E   /* 0..$7F */
+#define BIKE_BRAKE       0xFF0642   /* 0..$FF */
+#define BIKE_STEER       0xFF063A   /* -$7F..$7F */
+#define BIKE_SPEED       0xFF064A
+#define ROM_BRAKE_RATES  0x00A03C
+#define ROM_STEER_RATES  0x00A004   /* per profile: return, outward, counter */
+
+static uint16_t input_d1;   /* for the adapter */
+
+/* B ramps the throttle up, releasing lets it fall. */
+static void read_throttle(void)
+{
+    uint16_t t = rd16(THROTTLE_RAMP);
+    if (!(rd8(PAD1_HELD) & 0x10)) {
+        t = t < 0x0F ? 1 : (uint16_t)(t - 0x0F);
+        if (t < 1)
+            t = 1;
+    } else {
+        t += 0x14;
+        if (t >= 0xA8)
+            t = 0xA8;
+    }
+    wr16(THROTTLE_RAMP, t);
+    {
+        int16_t v = (int16_t)((int16_t)((t - 1) * 160) / 0xA8);
+        wr16(BIKE_THROTTLE, (uint16_t)(v > 0x7F ? 0x7F : v));
+    }
+}
+
+/* A ramps the brake up at a rate from the handling table. */
+static void read_brake(void)
+{
+    uint16_t profile = (rd16(0xFFC8B6) || rd16(HUD_HIDDEN)) ? rd16(0xFFB61C) : 5;
+    uint16_t rate = rd16(ROM_BRAKE_RATES + 2 * profile), b;
+    if (!(rd8(PAD1_HELD) & 0x40)) {
+        b = 1;
+    } else {
+        b = (uint16_t)(rd16(BRAKE_RAMP) + rate);
+        if (b >= 0xC5)
+            b = 0xC5;
+    }
+    wr16(BRAKE_RAMP, b);
+    wr16(BIKE_BRAKE, (uint16_t)(((int32_t)(int16_t)(b - 1) << 8) / 0xC5));
+}
+
+/*
+ * Left/Right move a steering value away from centre ($80) at one rate,
+ * steer back from the far side at another; with neither it returns to
+ * centre. A dead zone around centre, then scaled to +-$7F.
+ */
+static void read_steering(void)
+{
+    uint16_t profile = (rd16(0xFFC8B6) || rd16(HUD_HIDDEN)) ? rd16(0xFFB618) : 6;
+    uint32_t e = ROM_STEER_RATES + 8 * profile;
+    uint16_t back = rd16(e), out = rd16(e + 2), counter = rd16(e + 4), v;
+    int16_t s, steer;
+    if (profile >= 2) {
+        uint16_t extra = rd16(BIKE_SPEED) >> 7;
+        back += extra;
+        out += extra;
+        counter += extra;
+    }
+    input_d1 = back;
+    v = rd16(STEER_RAMP);
+    if (rd8(PAD1_HELD) & 0x04) {                 /* left */
+        if (v >= 0x80) {
+            v += out;
+            if (v >= 0xC7)
+                v = 0xC6;
+        } else {
+            v += counter;
+        }
+    } else if (rd8(PAD1_HELD) & 0x08) {          /* right */
+        if (v < 0x80) {
+            v -= out;
+            if (v < 0x3A)
+                v = 0x3A;
+        } else {
+            v -= counter;
+        }
+    } else if (v != 0x80) {
+        v = v > 0x80 ? (uint16_t)(v - back) : (uint16_t)(v + back);
+    }
+    wr16(STEER_RAMP, v);
+    s = (int16_t)v;
+    if (s > 0xC6) s = 0xC6;
+    else if (s < 0x3A) s = 0x3A;
+    if (s >= 0x6C && s <= 0x94)
+        s = 0x80;
+    steer = (int16_t)(((int32_t)(s - 0x80) << 8) / 0x8C);
+    if (steer > 0x7F) steer = 0x7F;
+    else if (steer <= -0x7F) steer = -0x7F;
+    wr16(BIKE_STEER, (uint16_t)-steer);
+}
+
+/* Player controls for one race frame ($975C). */
+void race_input(void)
+{
+    read_throttle();
+    read_brake();
+    read_steering();
+}
+
+void race_input_68k(void)
+{
+    race_input();
+    set_dn(1, 2, input_d1);
+}
+
+/* -------------------------------------------------------------- sounds */
+
+#define SFX_STATE        0xFFC7BE   /* previous frame: */
+#define SS_OFFROAD       0x00
+#define SS_PUSH          0x02
+#define SS_CURVE         0x04
+#define SS_SKID          0x06
+#define SS_SKID_PERIOD   0x08       /* byte */
+#define SS_SKID_TIMER    0x09       /* byte */
+#define BIKE_PUSH        0xFF065A
+#define BIKE_OFFROAD     0xFF066A
+#define BIKE_SKIDDING    0xFF06B6
+#define SKID_SOUND_ON    0xFF06B8
+#define ENGINE_FLAG      0xFFC80A   /* to the driver: off-road rumble */
+#define SOUND_REQUEST    0xFFC80B   /* sound command for this frame */
+#define ROM_DISTANCE_POINTS 0x009FD0
+
+static int sounds_d1 = -1;
+
+static void skid_sound(int on)
+{
+    wr8(SOUND_REQUEST, on ? 0x9C : 0xB3);
+    wr16(SKID_SOUND_ON, on ? 0xFFFF : 0);
+}
+
+/* Sliding against the turn, hard over, makes the bike skid. */
+static void detect_skid(void)
+{
+    const uint32_t s = SFX_STATE;
+    int16_t curve = (int16_t)rd16(0xFF0614), prev = (int16_t)rd16(s + SS_CURVE);
+    int16_t steer = (int16_t)rd16(BIKE_STEER);
+    uint16_t dir = rd16(TURN_DIR);
+    int skid = 0;
+    if (dir != 1 && (steer < 0 ? -steer : steer) >= 0x70 && curve != prev) {
+        if (curve > prev)
+            skid = dir != 3 && steer >= 0;
+        else
+            skid = dir != 2 && steer < 0;
+    }
+    wr16(BIKE_SKIDDING, skid ? 0xFFFF : 0);
+    wr16(0xFF06BA, (uint16_t)(curve - prev));
+    wr16(s + SS_CURVE, (uint16_t)curve);
+}
+
+/* Engine RPM, flags and this frame's sound request to the driver. */
+static void sound_mailbox(void)
+{
+    if (rd16(0xFF0666))
+        wr16(ENGINE_FLAG, 0);                  /* also clears SOUND_REQUEST */
+    do
+        wr16(Z80_BUSREQ, 0x100);
+    while (rd8(Z80_BUSREQ) & 1);
+    wr8(0xA01C36, rd8(0xFF0510) ? 0x80 : 0);
+    wr8(0xA01C31, rd8(BIKE_SPEED + 1));
+    wr8(0xA01C32, rd8(BIKE_SPEED));
+    wr8(0xA01C39, rd8(ENGINE_FLAG));
+    if (rd8(SOUND_REQUEST)) {
+        uint8_t cmd = rd8(SOUND_REQUEST);
+        wr8(SOUND_REQUEST, 0);
+        wr8(Z80_SOUND_COMMAND, cmd);
+    }
+    wr16(Z80_BUSREQ, 0);
+}
+
+/* Race sound state and distance points for one race frame ($98E4). */
+void race_sounds(void)
+{
+    const uint32_t s = SFX_STATE;
+    uint16_t mode = rd16(GAME_MODE) & ~1;
+
+    sounds_d1 = -1;
+    if (mode == MODE_RACE) {
+        wr16(0xFF06BC, 0);
+        wr16(0xFF06BE, 0);
+    }
+    if (rd16(0xFF06BC) && !rd16(0xFF06BE))
+        sound_command((rd8(0xFFC726) & 1) ? 0xB4 : 0xAD);
+    if (mode != 0x18 && mode != MODE_RACE)
+        return;
+
+    if (!rd16(BIKE_OFFROAD)) {
+        uint16_t points = rd16(ROM_DISTANCE_POINTS + 2 * (uint16_t)((int16_t)rd16(BIKE_SPEED) >> 4));
+        sounds_d1 = points;
+        wr32(0xFF0548, points);
+        score_add();
+    }
+    if (!rd16(s + SS_PUSH)) {
+        if (rd16(BIKE_PUSH))
+            skid_sound(1);
+    } else if (!rd16(BIKE_PUSH)) {
+        skid_sound(0);
+    }
+    wr16(s + SS_PUSH, rd16(BIKE_PUSH));
+
+    detect_skid();
+    if (!rd16(BIKE_PUSH)) {
+        if (!rd16(s + SS_SKID)) {
+            if (rd16(BIKE_SKIDDING)) {
+                int8_t t = (int8_t)(rd8(s + SS_SKID_TIMER) - 2);
+                wr8(s + SS_SKID_TIMER, (uint8_t)t);
+                if (t >= 0)
+                    goto offroad_done;         /* the original skips ahead here */
+                wr8(s + SS_SKID_TIMER, rd8(s + SS_SKID_PERIOD));
+                skid_sound(1);
+            }
+        } else if (!rd16(BIKE_SKIDDING)) {
+            skid_sound(0);
+        }
+    }
+    wr16(s + SS_SKID, rd16(BIKE_SKIDDING));
+
+    if (!rd16(s + SS_OFFROAD)) {
+        if (rd16(BIKE_OFFROAD)) {
+            wr8(ENGINE_FLAG, 0x80);
+            wr8(SOUND_REQUEST, 0xA8);
+        }
+    } else if (!rd16(BIKE_OFFROAD)) {
+        wr8(ENGINE_FLAG, 0);
+        wr8(SOUND_REQUEST, 0xB3);
+    }
+offroad_done:
+    wr16(s + SS_OFFROAD, rd16(BIKE_OFFROAD));
+    if (!rd8(0xFFC754))
+        sound_mailbox();
+}
+
+void race_sounds_68k(void)
+{
+    race_sounds();
+    if (sounds_d1 >= 0)
+        cpu.d[1] = (uint32_t)sounds_d1;
+}

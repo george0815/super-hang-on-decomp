@@ -33,3 +33,5 @@
 0045E2  start_objects_68k
 009F1C  race_turns_68k
 00468E  race_rivals_68k
+00975C  race_input_68k
+0098E4  race_sounds_68k
