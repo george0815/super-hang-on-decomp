@@ -36,3 +36,4 @@ code 007B24 CourseSelectFrame
 code 007DBA MusicSelectFrame
 code 004962 PasswordFrame
 code 007250 LogoFrame
+code 006826 OptionsFrame

@@ -148,3 +148,4 @@
 007DBA  music_select_frame_68k
 004962  pw_frame_68k
 007250  logo_frame_68k
+006826  options_frame_68k
