@@ -140,14 +140,17 @@ static void obj_move_z(uint32_t obj)
  */
 #define OBJ_SPRITE_SET   0x2D
 #define ROM_SPRITE_SETS  0x000204
-static void obj_pick_sprite(uint32_t obj, uint32_t depth_table)
+static int obj_pick_sprite(uint32_t obj, uint32_t depth_table)
 {
     int16_t depth = (int16_t)rd16(obj + OBJ_Z);
     uint32_t row;
+    int8_t offset;
     if (depth == 0 || depth > 0xC0)
-        return;
+        return -1;
     row = ROM_SPRITE_SETS + rd8(obj + OBJ_SPRITE_SET) * 20u;
-    wr16(obj + OBJ_SPRITE_MAP, rd16(row + (int8_t)rd8(depth_table + depth)));
+    offset = (int8_t)rd8(depth_table + depth);
+    wr16(obj + OBJ_SPRITE_MAP, rd16(row + offset));
+    return offset;
 }
 
 #define ROM_DEPTH_SPRITES_NEAR 0x006EC8
@@ -299,6 +302,31 @@ static void obj_blinker(uint32_t obj)
         obj_add_to_layer(obj);
 }
 
+/* Come closer; 1 if the object has passed the camera. */
+static int obj_passed(uint32_t obj)
+{
+    obj_approach(obj);
+    return ((int16_t)rd16(obj + OBJ_DISTANCE) >> 4) >= 0x1FF;
+}
+
+/* Move closer and project; frees the object once passed ($C6EC). */
+static int obj_roadside_step(uint32_t obj)
+{
+    if (obj_passed(obj)) {
+        obj_free(obj);
+        return 0;
+    }
+    obj_project_distance(obj);
+    obj_project_lane(obj);
+    return 1;
+}
+
+static void obj_roadside_draw(uint32_t obj)
+{
+    if ((int16_t)rd16(obj + OBJ_SCREEN_X) >= 0x70)
+        obj_add_to_layer(obj);
+}
+
 /* Roadside object coming towards the camera; removed once passed ($7132). */
 static void obj_approacher(uint32_t obj)
 {
@@ -309,17 +337,141 @@ static void obj_approacher(uint32_t obj)
         wr16(obj + OBJ_DISTANCE, 0x1E90);
         wr16(obj + OBJ_LANE, 0xFEFE);
     }
-    if (!rd16(OBJECTS_FROZEN)) {
-        obj_approach(obj);
-        if (((int16_t)rd16(obj + OBJ_DISTANCE) >> 4) >= 0x1FF) {
-            obj_free(obj);
-            return;
-        }
-        obj_project_distance(obj);
-        obj_project_lane(obj);
+    if (!rd16(OBJECTS_FROZEN) && !obj_roadside_step(obj))
+        return;
+    obj_roadside_draw(obj);
+}
+
+/* Starting lights: red, amber, green every 30 frames, with beeps ($7136). */
+#define OBJ_TIMER   0x2E
+static void obj_start_lights(uint32_t obj)
+{
+    uint8_t f = rd8(obj + OBJ_FLAGS);
+    wr8(obj + OBJ_FLAGS, f | 1);
+    if (!(f & 1)) {
+        wr16(obj + OBJ_SPRITE_MAP, 0x39F6);
+        wr16(obj + OBJ_DISTANCE, 0x1E90);
+        wr16(obj + OBJ_LANE, 0xFEFE);
+        wr8(obj + OBJ_TIMER, 0x1E);
+        sound_command(0x88);
     }
-    if ((int16_t)rd16(obj + OBJ_SCREEN_X) >= 0x70)
+    if (!rd16(OBJECTS_FROZEN)) {
+        uint8_t t = (uint8_t)(rd8(obj + OBJ_TIMER) - 1);
+        wr8(obj + OBJ_TIMER, t);
+        if (t == 0) {
+            uint8_t light = (uint8_t)(rd8(obj + OBJ_SPRITE_SET) + 1);
+            wr8(obj + OBJ_TIMER, 0x1E);
+            wr8(obj + OBJ_SPRITE_SET, light);
+            if (light == 1) {
+                wr16(obj + OBJ_SPRITE_MAP, 0x3A0A);
+                sound_command(0x88);
+            } else if (light == 2) {
+                wr16(obj + OBJ_SPRITE_MAP, 0x39E2);
+                sound_command(0x89);
+            }
+        }
+        if (!obj_roadside_step(obj))
+            return;
+    }
+    obj_roadside_draw(obj);
+}
+
+/*
+ * When the sprite map changes, queue a DMA of its tiles into `slot`
+ * ($C5AE). Tiles go to `tile` (or `tile + alt` on alternate updates of the
+ * toggle counter, so the frame being shown is not overwritten); `toggle`
+ * is added to that counter. The table holds 6-byte source/length entries,
+ * picked by the sprite-row offset `index`.
+ */
+#define TILE_TOGGLE 0xFFC800
+static void obj_queue_tiles(uint32_t obj, uint32_t table, uint32_t slot,
+                            uint16_t tile, uint16_t alt, uint16_t toggle, uint16_t index)
+{
+    uint16_t map = rd16(obj + OBJ_SPRITE_MAP);
+    uint32_t cmd, entry;
+    if (map == rd16(obj + OBJ_ANIM))
+        return;
+    wr16(obj + OBJ_ANIM, map);
+    wr16(TILE_TOGGLE, rd16(TILE_TOGGLE) + toggle);
+    if (rd8(TILE_TOGGLE + 1) & 1)
+        tile += alt;
+    wr16(obj + OBJ_TILE_BASE, tile);
+    /* VRAM write command for tile * 32 (built like the original) */
+    cmd = (uint32_t)(int32_t)(int16_t)tile;
+    cmd = (cmd & 0xffff0000u) | (uint16_t)(tile << 5);
+    cmd <<= 2;
+    cmd = (cmd & 0xffff0000u) | ((cmd & 0xffff) >> 2) | 0x4000;
+    cmd = cmd << 16 | cmd >> 16;
+    entry = table + (uint16_t)(index * 3);
+    wr32(slot, cmd);
+    wr32(slot + 4, rd32(entry));
+    wr16(slot + 8, rd16(entry + 4));
+    wr16(slot + 10, 0xFFFF);
+}
+
+/* Roadside hazard: counts a hit when passed close by ($712A). */
+static void obj_hazard(uint32_t obj)
+{
+    int index;
+    if (rd16(OBJECTS_FROZEN)) {
         obj_add_to_layer(obj);
+        return;
+    }
+    if (!rd16(0xFF0666) && (int16_t)rd16(obj + OBJ_Z) >= 0x71) {
+        int16_t side = (int16_t)rd16(obj + OBJ_LANE) < 0 ? -0x20 : 0x20;
+        int16_t gap = (int16_t)(rd16(obj + OBJ_SCREEN_X) + side - 0x120);
+        if (gap < 0) gap = (int16_t)-gap;
+        if (gap <= 0x2A)
+            wr16(0xFF0656, rd16(0xFF0656) + 1);
+    }
+    if (!obj_roadside_step(obj))
+        return;
+    index = obj_pick_sprite(obj, ROM_DEPTH_SPRITES_FAR);
+    if (index < 0)
+        index = rd16(obj + OBJ_SCREEN_X);   /* the original reuses that register */
+    obj_queue_tiles(obj, 0x00C5FA, 0xFFC7E0, 0x408, 0x5A, 0, (uint16_t)index);
+    obj_add_to_layer(obj);
+}
+
+/*
+ * Roadside sign with three tile sets ($712E). Once passed, it starts the
+ * streamed upload of the next piece of scenery.
+ */
+#define SIGN_KIND   0x3A
+static void obj_sign(uint32_t obj)
+{
+    uint16_t kind = rd16(obj + SIGN_KIND);
+    uint32_t table;
+    int index;
+    if (rd16(OBJECTS_FROZEN)) {
+        obj_add_to_layer(obj);
+        return;
+    }
+    if (obj_passed(obj)) {
+        if (kind != 3)
+            wr16(0xFF06B4, rd16(0xFF06B4) - 1);
+        if (!rd16(0xFF06BE)) {
+            uint16_t k = (uint16_t)(rd16(0xFF060C) * 72 + rd16(0xFFC7DC));
+            wr32(0xFFC7D0, rd32(0x008ED4 + k));
+            wr16(0xFFC7DC, rd16(0xFFC7DC) + 4);
+            if (rd16(HUD_HIDDEN) && kind == 3)
+                wr16(0xFFC7DC, rd16(0xFFC7DC) - 8);
+            wr16(0xFFC7CE, 0);
+            wr16(0xFFC7CC, 2);
+        }
+        obj_free(obj);
+        return;
+    }
+    if (kind == 3)
+        return;
+    obj_project_distance(obj);
+    wr16(obj + OBJ_SCREEN_X, (uint16_t)(((int16_t)rd16(ROAD_X_LINES + 2 * rd16(obj + OBJ_ROAD_LINE)) >> 6) + 0x120));
+    index = obj_pick_sprite(obj, ROM_DEPTH_SPRITES_FAR);
+    if (index < 0)
+        index = rd16(obj + OBJ_SCREEN_X);
+    table = kind == 0 ? 0x00C654 : kind == 1 ? 0x00C636 : 0x00C690;
+    obj_queue_tiles(obj, table, 0xFFC7EC, 0x4BC, 0, 1, (uint16_t)index);
+    obj_add_to_layer(obj);
 }
 
 /*
@@ -470,7 +622,10 @@ static void (*const handlers[25])(uint32_t obj) = {
     [(0x7116 - 0x710A) / 4] = obj_bike_overlay_2,
     [(0x711A - 0x710A) / 4] = obj_rider,
     [(0x7122 - 0x710A) / 4] = obj_pause,
+    [(0x712A - 0x710A) / 4] = obj_hazard,
+    [(0x712E - 0x710A) / 4] = obj_sign,
     [(0x7132 - 0x710A) / 4] = obj_approacher,
+    [(0x7136 - 0x710A) / 4] = obj_start_lights,
     [(0x711E - 0x710A) / 4] = obj_blinker,
     [(0x714A - 0x710A) / 4] = obj_line_marker,
     [(0x7152 - 0x710A) / 4] = obj_column_stopper,
