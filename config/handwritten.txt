@@ -76,3 +76,9 @@
 006E28  sound_driver_load_68k
 00BF98  time_record_tiles_68k
 00DB5E  ranking_rows_68k
+0075C6  title_launch_68k
+0075CA  title_launch_68k
+0075CE  title_launch_68k
+0075D2  title_launch_68k
+0075D6  title_launch_68k
+0075DA  title_launch_68k
