@@ -1,0 +1,190 @@
+/* The title screen (game mode 4): intro sequence and menu effects. */
+
+#include "game.h"
+
+#define TITLE_STEP       0xFFC72C   /* byte: intro step x4 */
+#define TITLE_COUNT      0xFFC712
+#define TITLE_TIMER      0xFFC714
+#define TITLE_PHASE      0xFFC716
+#define MENU_STATE       0xFFB600   /* bit 1: second menu; bits 0/2: cursor */
+#define FRAME_COUNTER_BYTE 0xFFC726
+
+/* Copy colours into the palette buffer and mark it ($738A). */
+static void palette_words(uint32_t dst, uint32_t src, int count)
+{
+    int k;
+    for (k = 0; k < count; k++)
+        wr16(dst + 2 * k, rd16(src + 2 * k));
+    wr8(VDP_PALETTE_DIRTY, rd8(VDP_PALETTE_DIRTY) | 1);
+}
+
+/*
+ * Step 0: launch the title bike as a thrown object ($75EA): handler 4
+ * with a fixed fall, its x from a ROM table.
+ */
+static void title_launch(void)
+{
+    uint8_t step = rd8(TITLE_STEP);
+    uint32_t obj = 0xFFCE40 + 16u * step;
+    if (rd16(obj))
+        return;
+    wr16(obj, 4);
+    wr8(obj + 0x2D, (uint8_t)((int8_t)step >> 2));
+    wr32(obj + 0x18, 0x100000);
+    wr32(obj + 0x1C, 0x17000);
+    wr16(obj + 0x20, 4);
+    wr16(obj + 4, rd16(0x00763C + (uint8_t)((int8_t)step >> 1)));
+    wr16(obj + 8, 0xFFB4);
+}
+
+void title_launch_68k(void) { title_launch(); }
+
+/*
+ * Step 4: wipe the first VRAM tile in a growing checker of colour 1, then
+ * clear it again ($76B4), one stage every 4 counts.
+ */
+static int wipe_d1;
+static void title_wipe(void)
+{
+    uint16_t n;
+    int k;
+    wipe_d1 = 0;
+    wr16(TITLE_TIMER, rd16(TITLE_TIMER) - 1);
+    if ((int16_t)rd16(TITLE_TIMER) >= 0)
+        return;
+    n = (uint16_t)(rd16(TITLE_COUNT) + 1);
+    wr16(TITLE_COUNT, n);
+    if (n > 0x20) {
+        wr32(VDP_CTRL, 0x40000000);
+        for (k = 0; k <= (n >> 2) - 8; k++)
+            wr32(VDP_DATA, 0);
+    } else {
+        if (n & 3)
+            return;
+        wr32(VDP_CTRL, 0x40000000);
+        for (k = 0; k <= (n >> 2); k++)
+            wr32(VDP_DATA, k & 1 ? 0x00110011 : 0x11001100);
+        wipe_d1 = 1;
+    }
+    if (rd16(TITLE_COUNT) == 0x40) {
+        wr8(TITLE_STEP, rd8(TITLE_STEP) + 4);
+        wr32(TITLE_COUNT, 0);
+        wr32(TITLE_PHASE, 0);
+    }
+}
+
+void title_wipe_68k(void)
+{
+    title_wipe();
+    if (wipe_d1)
+        cpu.d[1] = 0x11001100;
+}
+
+/*
+ * Step 8: flash two colour ramps, alternating every count, ten counts
+ * ($7740); then wait for the demo.
+ */
+static int flash_d1;
+static void title_flash(void)
+{
+    uint16_t phase;
+    int odd;
+    flash_d1 = 0;
+    if (rd8(TITLE_COUNT + 1) >= 0x0A) {
+        wr8(TITLE_STEP, rd8(TITLE_STEP) + 4);
+        wr16(TITLE_COUNT, 0xB4);
+        wr16(0xFFC71C, 0);
+        return;
+    }
+    odd = rd8(TITLE_COUNT + 1) & 1;
+    wr16(TITLE_TIMER, rd16(TITLE_TIMER) - 1);
+    if ((int16_t)rd16(TITLE_TIMER) >= 0)
+        return;
+    wr16(TITLE_TIMER, 4);
+    phase = (uint16_t)(rd16(TITLE_PHASE) + 2);
+    if (phase >= (odd ? 0x0C : 0x0E)) {
+        phase = 0;
+        wr16(TITLE_COUNT, rd16(TITLE_COUNT) + 1);
+    }
+    wr16(TITLE_PHASE, phase);
+    if (odd)
+        palette_words(0xFFD3A4, 0x007928 + phase, 6);
+    else
+        palette_words(0xFFD3B0, 0x00790C + phase, 7);
+    flash_d1 = 1;
+}
+
+void title_flash_68k(void)
+{
+    title_flash();
+    if (flash_d1)
+        cpu.d[1] = 0xFFFF;
+}
+
+/* Step 12: after a while, start the demo race ($75B0). */
+static void title_wait(void)
+{
+    wr16(0xFFC82A, rd16(0xFFC82A) - 1);
+    if ((int16_t)rd16(0xFFC82A) >= 0)
+        return;
+    wr16(0xFFC722, 0);
+    wr16(0xFFC704, 0x14);
+}
+
+void title_wait_68k(void) { title_wait(); }
+
+/* Cycle 12 colours of the title every 8 frames ($77C6). */
+static int cycle_d1;
+static void title_cycle(void)
+{
+    cycle_d1 = 0;
+    wr16(0xFFC70E, rd16(0xFFC70E) - 1);
+    if ((int16_t)rd16(0xFFC70E) >= 0)
+        return;
+    wr16(0xFFC70E, 7);
+    wr16(0xFFC710, rd16(0xFFC710) - 2);
+    if ((int16_t)rd16(0xFFC710) < 0)
+        wr16(0xFFC710, 0x16);
+    palette_words(0xFFD3E8, 0x0078DE + rd16(0xFFC710), 12);
+    cycle_d1 = 1;
+}
+
+void title_cycle_68k(void)
+{
+    title_cycle();
+    if (cycle_d1)
+        cpu.d[1] = 0xFFFF;
+}
+
+/* The blinking menu cursor: two positions per menu, the selected one
+   shown every other 16 frames ($7806). */
+static void title_cursor(void)
+{
+    uint8_t m = rd8(MENU_STATE);
+    int second = (m & 2) != 0;
+    uint32_t top = second ? 0x57960003 : 0x579C0003, bottom = second ? 0x58960003 : 0x589C0003;
+    wr32(VDP_CTRL, top);
+    wr16(VDP_DATA, 0);
+    wr32(VDP_CTRL, bottom);
+    wr16(VDP_DATA, 0);
+    if (!(rd8(FRAME_COUNTER_BYTE) & 0x10))
+        return;
+    wr32(VDP_CTRL, (m & (second ? 4 : 1)) ? bottom : top);
+    wr16(VDP_DATA, 0xC349);
+}
+
+void title_cursor_68k(void) { title_cursor(); }
+
+/* Copy 16 words of VRAM through $FFE900 ($7FAA). */
+static void vram_copy16(uint32_t read_cmd, uint32_t write_cmd)
+{
+    int k;
+    wr32(VDP_CTRL, read_cmd);
+    for (k = 0; k < 16; k++)
+        wr16(0xFFE900 + 2 * k, rd16(VDP_DATA));
+    wr32(VDP_CTRL, write_cmd);
+    for (k = 0; k < 16; k++)
+        wr16(VDP_DATA, rd16(0xFFE900 + 2 * k));
+}
+
+void vram_copy16_68k(void) { vram_copy16(cpu.d[7], cpu.d[6]); }
