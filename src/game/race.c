@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "game.h"
+#include "sho_funcs.h"
 
 #define GAME_MODE        0xFFC704
 #define MODE_RACE        0x14
@@ -2469,3 +2470,25 @@ static void race_frame_end(void)
 }
 
 void race_frame_end_68k(void) { race_frame_end(); }
+
+/*
+ * The second half of a demo race frame ($89B6): objects and scroll
+ * tables; when the demo's time runs out the ranking follows, C/Start
+ * fades back to the logo.
+ */
+static void demo_frame_end(void)
+{
+    objects_update();
+    scroll_tables();
+    if (!rd8(CLOCK)) {
+        wr16(GAME_MODE, 0x20);
+        return;
+    }
+    if (rd8(0xFFC707) & 0xA0) {
+        call68k(f_006DD4);
+        wr16(0xFFC722, 0);
+        wr16(GAME_MODE, 0);
+    }
+}
+
+void demo_frame_end_68k(void) { demo_frame_end(); }

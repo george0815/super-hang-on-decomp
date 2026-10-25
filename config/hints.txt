@@ -40,3 +40,4 @@ code 006826 OptionsFrame
 code 00D93A RankingFrame
 code 0086D2 RaceStartFrame
 code 008B58 RaceFrameEnd
+code 0089B6 DemoFrameEnd
