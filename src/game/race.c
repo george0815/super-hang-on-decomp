@@ -679,3 +679,239 @@ void race_sounds_68k(void)
     if (sounds_d1 >= 0)
         cpu.d[1] = (uint32_t)sounds_d1;
 }
+
+/* --------------------------------------------------------------- speed */
+
+#define SPEED_STATE      0xFFC73E   /* +0 target speed, +4 scroll fraction */
+#define BIKE_SPEED_FRAC  0xFF064A   /* long: speed 16.16 */
+#define CRASHING         0xFF0666
+#define TIME_UP          0xFF06BC
+#define STOPPED          0xFF06BE
+#define TURBO            0xFF0510
+#define ROAD_CURVE       0xFF0614
+#define COURSE_DISTANCE  0xFF0530   /* long, capped per course */
+#define ROM_TOP_SPEED    0x009F7E   /* long */
+#define ROM_BRAKE_LEVELS 0x009FFA   /* four brake thresholds */
+
+static uint16_t speed_d1;
+
+/* Ease the curve back to the centre line by `step` ($9EF2). */
+static void curve_recentre(int16_t step)
+{
+    int16_t c = (int16_t)rd16(ROAD_CURVE);
+    if ((c < 0 ? -c : c) < 0x0C || c == 0)
+        return;
+    wr16(ROAD_CURVE, (uint16_t)(c < 0 ? c + step : c - step));
+}
+
+static uint16_t divs_q(int32_t dividend, uint16_t divisor)
+{
+    return (uint16_t)f_divs(divisor, (uint32_t)dividend);
+}
+
+/* 0..3 extra quarters of the acceleration for upgrade levels. */
+static int32_t upgrade_bonus(uint16_t level, uint32_t quarter)
+{
+    int n = level == 0 ? 0 : level == 1 ? 1 : level == 2 ? 2 : 3;
+    return (int32_t)(quarter * (uint32_t)n);
+}
+
+static int upgraded(void) { return rd16(0xFFC8B6) || rd16(HUD_HIDDEN); }
+
+/* Speed change for one race frame. */
+static void speed_update(void)
+{
+    const uint32_t s = SPEED_STATE;
+    uint16_t throttle, target, sp;
+    int32_t accel, bonus = 0, brake_unit;
+
+    if (rd16(0xFFC8A0) && !rd16(STOPPED)) {
+        if (rd16(0xFFC8A2)) {
+            wr16(0xFFC8A2, rd16(0xFFC8A2) - 1);
+            wr16(0xFFC8A4, 0x31);
+            wr16(BIKE_THROTTLE, 0);
+            goto throttle_read;
+        }
+        wr16(0xFFC8A4, rd16(0xFFC8A4) - 1);
+        if (!rd16(0xFFC8A4))
+            wr16(0xFFC8A2, 4);
+    }
+    if (rd16(STOPPED) || !rd8(0xFF0554))
+        wr16(BIKE_THROTTLE, 0);
+throttle_read:
+    throttle = rd16(BIKE_THROTTLE);
+    if (rd16(BIKE_PUSH))
+        throttle = 0;
+    if (rd16(BIKE_OFFROAD))
+        throttle = (uint16_t)f_divu(rd16(0x009F90), throttle);
+    target = (uint16_t)(((uint32_t)rd16(ROM_TOP_SPEED) * throttle) / 0x7F);
+    wr16(s, target);
+
+    accel = (int16_t)divs_q((int32_t)(rd32(ROM_TOP_SPEED) - rd32(BIKE_SPEED_FRAC)), 0x400);
+    if (upgraded()) {
+        uint32_t quarter = (uint32_t)accel >> 2;
+        uint16_t level;
+        bonus += upgrade_bonus(rd16(0xFFB620), quarter);
+        if (rd16(0xFFC8B6) || (int16_t)rd16(0xFFB64E) >= 0)
+            bonus += upgrade_bonus(rd16(0xFFB61E), quarter);
+        level = rd16(0xFFB61A);
+        accel = level == 0 ? accel * 3 : level >= 4 ? accel * 8 : level == 1 ? accel * 4 : accel * 6;
+    } else {
+        accel *= 8;
+    }
+    accel += bonus;
+
+    sp = rd16(BIKE_SPEED);
+    if ((int16_t)sp >= (int16_t)rd16(0x009F82)) {
+        if ((int16_t)sp > (int16_t)target) {
+            int32_t d = (int32_t)rd32(0x009F8A);
+            int mul = 4;
+            if (upgraded()) {
+                uint16_t level = rd16(0xFFB61A);
+                mul = level < 2 ? 1 : level < 4 ? 2 : 4;
+            }
+            accel = -d * mul;
+        } else if ((int16_t)sp == (int16_t)target) {
+            accel = 0;
+        }
+        brake_unit = -2 * (int32_t)rd32(0x009F8A);
+        if (rd16(BIKE_PUSH)) {
+            accel += 3 * brake_unit;
+        } else if (!(rd16(HUD_HIDDEN) && (int16_t)rd16(0xFFB64C) < 0)) {
+            int16_t b = (int16_t)rd16(BIKE_BRAKE);
+            int n = 0;
+            while (n < 4 && b >= (int16_t)rd16(ROM_BRAKE_LEVELS + 2 * n))
+                n++;
+            if (n == 4)
+                wr16(0xFF0626, 1);
+            accel += n * brake_unit;
+        }
+    }
+    accel += (int32_t)rd32(BIKE_SPEED_FRAC);
+    if (accel < 0)
+        accel = 0;
+    wr32(BIKE_SPEED_FRAC, (uint32_t)accel);
+
+    /* turbo with C above $F0 (mode $18), otherwise drop back to $F1 */
+    {
+        uint16_t mode = rd16(GAME_MODE) & ~1, step = (uint16_t)accel;   /* the original reuses d1 */
+        int turbo_ok = 0;
+        if (mode == 0x18) {
+            step = 2;
+            turbo_ok = 1;
+            if (upgraded()) {
+                uint16_t level = rd16(0xFFB61A);
+                if (level < 3)
+                    turbo_ok = 0;
+                else
+                    step = level == 5 ? 5 : level == 4 ? 3 : 1;
+            }
+        }
+        if (turbo_ok && !(rd16(BIKE_OFFROAD) | rd16(CRASHING) | rd16(TIME_UP)) &&
+            (rd8(PAD1_HELD) & 0x20) && (int16_t)rd16(BIKE_SPEED) > 0xF0) {
+            wr8(TURBO, 0xFF);
+            wr16(BIKE_SPEED, rd16(BIKE_SPEED) + step);
+            if ((int16_t)rd16(BIKE_SPEED) > 0x117)
+                wr16(BIKE_SPEED, 0x117);
+            return;
+        }
+        wr8(TURBO, 0);
+        if ((int16_t)rd16(BIKE_SPEED) > 0xF1) {
+            wr16(BIKE_SPEED, rd16(BIKE_SPEED) - step);
+            if ((int16_t)rd16(BIKE_SPEED) <= 0xF0)
+                wr16(BIKE_SPEED, 0xF1);
+        }
+    }
+}
+
+/* Distance travelled, course progress and road scroll ($9DE4). */
+static void travel(void)
+{
+    const uint32_t s = SPEED_STATE;
+    uint32_t step = rd32(0x009F86), total;
+    uint16_t q, rem, d34 = 0x22;
+
+    if ((int16_t)rd16(TURN_DIR) > 1) {
+        /* on the inside of a turn the bike covers less ground */
+        int32_t c = (int16_t)rd16(ROAD_CURVE);
+        int16_t f;
+        if (rd16(TURN_DIR) != 3)
+            c = -c;
+        f = (int16_t)(divs_q(c, 0x28) + rd16(TURN_POWER));
+        step = f_divs(rd16(TURN_POWER), (uint32_t)((int32_t)(int16_t)step * f));
+    }
+    step = (uint32_t)(uint16_t)step * rd16(BIKE_SPEED);
+    wr32(0xFF0646, step);
+    wr32(COURSE_PROGRESS, rd32(COURSE_PROGRESS) + step);
+    wr8(0xFF0744, (int16_t)rd16(COURSE_PROGRESS) >= 0x7D0 ? 0xFF : 0);
+
+    total = step + rd32(COURSE_DISTANCE);
+    {
+        uint32_t cap = rd16(HUD_HIDDEN) ? rd32(0x009FB0 + 4 * rd16(0xFFC85A))
+                                        : rd32(0x009FA0 + 4 * rd16(0xFF060C));
+        if ((int32_t)total > (int32_t)cap)
+            total = cap;
+    }
+    wr32(COURSE_DISTANCE, total);
+
+    if (!rd8(0xFF0744) && !rd8(0xFF0734)) {
+        uint32_t ev = rd32(0xFF0602) + (int16_t)rd16(0xFF0606);
+        if ((int16_t)rd16(ev) <= (int16_t)rd16(COURSE_PROGRESS)) {
+            wr16(0xFF061E, rd16(ev + 2));
+            wr16(0xFF0606, rd16(0xFF0606) + 4);
+        }
+    }
+
+    q = (uint16_t)(rd16(BIKE_SPEED) / d34);
+    rem = (uint16_t)(rd16(BIKE_SPEED) % d34);
+    if ((int16_t)rd16(BIKE_SPEED) < 0) {
+        /* divu of the sign-extended value, as the original */
+        uint32_t r = f_divu(d34, (uint32_t)(int32_t)(int16_t)rd16(BIKE_SPEED));
+        q = (uint16_t)r;
+        rem = (uint16_t)(r >> 16);
+    }
+    wr16(s + 4, rd16(s + 4) + rem);
+    if ((int16_t)rd16(s + 4) > (int16_t)d34) {
+        wr16(s + 4, rd16(s + 4) - d34);
+        q++;
+    }
+    speed_d1 = (uint16_t)(q * 2);
+    wr16(0xFF065E, speed_d1);
+    wr16(0xFF0662, rd16(0xFF0662) + speed_d1);
+}
+
+/* The bike's speed and travel for one race frame ($9B0C). */
+void race_speed(void)
+{
+    if ((rd16(GAME_MODE) & ~1) == 0x10)
+        return;
+    speed_d1 = 0;
+    if (rd16(TIME_UP)) {
+        curve_recentre(8);
+        if ((int16_t)rd16(COURSE_PROGRESS) > 0x1F) {
+            if (!rd16(STOPPED))
+                wr32(BIKE_SPEED_FRAC, 0);
+            wr16(STOPPED, 0xFFFF);
+            wr16(0xFF06B4, 0xFFFF);
+            wr16(OBJECTS + OBJ_HANDLER, 0);
+            travel();
+            return;
+        }
+    }
+    if (rd16(0xFFC89E)) {
+        wr16(BIKE_SPEED, 0);
+    } else if (rd16(CRASHING)) {
+        int16_t sp = (int16_t)rd16(BIKE_SPEED);
+        wr16(BIKE_SPEED, (uint16_t)((int16_t)(sp * 30) >> 5));
+    } else {
+        speed_update();
+    }
+    travel();
+}
+
+void race_speed_68k(void)
+{
+    race_speed();
+    if ((rd16(GAME_MODE) & ~1) != 0x10)
+        set_dn(1, 2, speed_d1);
+}
