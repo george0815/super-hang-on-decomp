@@ -105,3 +105,17 @@
 0052D4  end_menu_68k
 0052C8  parts_menu_68k
 0052D0  race_menu_68k
+00678C  part_box_normal_68k
+006794  part_box_lit_68k
+00679A  part_box_68k
+0063DE  part_box_selected_68k
+0063FA  part_box_unlit_68k
+0067B8  part_name_68k
+0067F0  part_label_68k
+0064D4  mechanic_words_68k
+006404  mechanic_comment_68k
+006556  part_piece_hide_68k
+00650A  part_piece_blink_68k
+006596  part_label_normal_68k
+00657A  part_label_blink_68k
+006504  part_blink_68k
