@@ -149,3 +149,4 @@
 004962  pw_frame_68k
 007250  logo_frame_68k
 006826  options_frame_68k
+00D93A  ranking_frame_68k

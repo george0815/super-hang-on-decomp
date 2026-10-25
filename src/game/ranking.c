@@ -102,3 +102,153 @@ void ranking_defaults_68k(void)
     cpu.a[0] += 7 * 0x0E;
     set_dn(0, 2, 0xFFFF);
 }
+
+/* ------------------------------------------------------------ frame */
+
+#include "sho_funcs.h"
+
+#define PAD1_HELD        0xFFC706
+#define PAD1_PRESSED     0xFFC707
+#define HUD_TASK         0xFFC8A6
+#define RANKING_MODE     0xFFC8AA   /* 2: entering a name */
+#define NAME_ENTRY       0xFF03C0   /* position, letter, repeat timer, ...,
+                                       +$C seconds left (BCD), +$D frames */
+#define ROM_ALPHABET     0x00DA84   /* A-Z . back end */
+#define LETTER_BACK      0x1B
+#define LETTER_END       0x1C
+
+static void ranking_end(void)
+{
+    call68k(f_006DD4);               /* fade out (waits for VBlanks) */
+    wr16(0xFFC722, 0);
+    wr16(0xFFC704, 0);
+}
+
+/* Left/right with auto-repeat every 4 frames ($DA5A). */
+static int name_step(void)
+{
+    uint8_t held = rd8(PAD1_HELD) & 0x0C;
+    if (!held) {
+        wr16(NAME_ENTRY + 4, 0);
+        return 0;
+    }
+    wr16(NAME_ENTRY + 4, rd16(NAME_ENTRY + 4) - 1);
+    if ((int16_t)rd16(NAME_ENTRY + 4) >= 0)
+        return 0;
+    wr16(NAME_ENTRY + 4, 3);
+    return held & 8 ? 1 : -1;
+}
+
+/* Finish the name: the cursor slot blank if on back/end; one name is
+   not allowed. */
+static void name_done(uint32_t name)
+{
+    if (rd16(NAME_ENTRY + 2) >= LETTER_BACK)
+        wr8(name + rd16(NAME_ENTRY), 0x20);
+    if (rd32(name) == 0x53455820)
+        wr32(name, 0x4E414F20);
+    ranking_end();
+}
+
+/*
+ * One name entry frame: left/right pick a letter (the fourth slot only
+ * offers back and end), A/B/C enter it, Start or the 30 second limit
+ * finish.
+ */
+static void name_entry_frame(void)
+{
+    uint32_t name = rd32(0xFFC8B0);
+    uint16_t pos, letter;
+    int d;
+    if (rd8(PAD1_PRESSED) & 0x80) {
+        name_done(name);
+        return;
+    }
+    if (rd16(HUD_TASK) != 5)
+        goto objects;
+    wr8(NAME_ENTRY + 0x0D, rd8(NAME_ENTRY + 0x0D) - 1);
+    if (!rd8(NAME_ENTRY + 0x0D)) {
+        wr8(NAME_ENTRY + 0x0D, 0x1D);
+        if (!rd8(NAME_ENTRY + 0x0C)) {
+            name_done(name);
+            return;
+        }
+        wr8(NAME_ENTRY + 0x0C, bcd_sub(rd8(NAME_ENTRY + 0x0C), 1));
+    }
+    pos = rd16(NAME_ENTRY);
+    d = name_step();
+    if (pos == 3) {
+        uint16_t t = (uint16_t)(d + rd16(NAME_ENTRY + 2));
+        letter = t < LETTER_BACK ? LETTER_END : t == LETTER_BACK ? LETTER_BACK :
+                 t == LETTER_END ? LETTER_END : LETTER_BACK;
+    } else {
+        letter = (uint16_t)(rd16(NAME_ENTRY + 2) + d);
+        if (letter >= 0x1D)
+            letter = d < 0 ? LETTER_END : 0;
+    }
+    wr16(NAME_ENTRY + 2, letter);
+    if (rd8(PAD1_PRESSED) & 0x70) {
+        if (letter == LETTER_END) {
+            wr8(name + pos, 0x20);
+            if (rd32(name) == 0x53455820)
+                wr32(name, 0x4E414F20);
+            ranking_end();
+            return;
+        }
+        if (letter == LETTER_BACK) {
+            if (pos) {
+                wr8(name + pos, 0x20);
+                wr16(NAME_ENTRY, --pos);
+            }
+        } else {
+            wr16(NAME_ENTRY, ++pos);
+        }
+    }
+    wr8(name + rd16(NAME_ENTRY), rd8(ROM_ALPHABET + rd16(NAME_ENTRY + 2)));
+objects:
+    objects_update();
+}
+
+/*
+ * One ranking frame after the VBlank ($D93A): name entry, or the table
+ * shown for a while (C/Start leaves), then the next page.
+ */
+static void ranking_frame(void)
+{
+    if (rd16(RANKING_MODE) == 2) {
+        if (rd16(0xFFC71C)) {
+            wr16(0xFFC71C, rd16(0xFFC71C) - 1);
+            wr16(VDP_CTRL, 0x921C);
+            wr16(HUD_TASK, 1);
+            objects_update();
+            return;
+        }
+        name_entry_frame();
+        return;
+    }
+    if (rd8(PAD1_PRESSED) & 0xA0) {
+        ranking_end();
+        return;
+    }
+    if (rd16(0xFFC71C)) {
+        wr16(0xFFC71C, rd16(0xFFC71C) - 1);
+        if (!rd16(0xFFC71C)) {
+            if (rd16(0xFFC71A) == 4) {
+                ranking_end();
+                return;
+            }
+            wr16(VDP_CTRL, 0x921C);
+            wr16(HUD_TASK, 1);
+        }
+    } else if (rd16(HUD_TASK) == 6) {
+        wr16(HUD_TASK, 0);
+        wr16(0xFFC71C, 0x3C);
+        wr16(0xFFC70E, rd16(0xFFC70E) + 1);
+        wr16(0xFFC71A, rd16(0xFFC71A) + 1);
+        if (rd16(RANKING_MODE) == 1)
+            wr16(0xFFC71C, 0x96);
+    }
+    objects_update();
+}
+
+void ranking_frame_68k(void) { ranking_frame(); }
