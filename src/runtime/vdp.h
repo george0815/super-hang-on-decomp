@@ -26,6 +26,8 @@ typedef struct {
     uint8_t fill_pending;  /* DMA fill waiting for its data word */
 
     int line;              /* scanline being displayed (0..261) */
+    uint16_t line_vsram[VDP_LINES][2];  /* VSRAM 0-1 as each line was drawn
+                                           (raster effects change them) */
     int hint_counter;
     uint8_t vint_pending;
     uint8_t in_vblank;

@@ -19,3 +19,5 @@ tools/trace/gpgx_play
 tools/trace/obj_hook/
 tools/trace/ymcmp
 compile_commands.json
+tools/ext/
+tools/snes/snesrun

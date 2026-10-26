@@ -114,6 +114,16 @@ void host_frame(const uint8_t *pixels)
             fwrite(rgb, 1, 3, f);
         }
         fclose(f);
+        /* the VDP's memories and registers, for the SNES screen converter */
+        snprintf(path, sizeof path, "%s/live_%05d.vdp", outdir, frame);
+        f = fopen(path, "wb");
+        if (!f) { perror(path); continue; }
+        fwrite(vdp.vram, 1, sizeof vdp.vram, f);
+        fwrite(vdp.cram, 2, 64, f);
+        fwrite(vdp.vsram, 2, 64, f);
+        fwrite(vdp.reg, 1, sizeof vdp.reg, f);
+        fwrite(vdp.line_vsram, 2, VDP_LINES * 2, f);
+        fclose(f);
     }
     if (++frame >= frames)
         exit(0);

@@ -3,7 +3,7 @@ SHA1    := ecfd7b3bf4dcbee472ddf2f9cdbe968a05b814e0
 PYTHON  ?= python3
 VASM    ?= tools/bin/vasmm68k_mot
 
-.PHONY: all check disasm report rom recomp fntest replay verify sndtest port clean
+.PHONY: all check disasm report rom recomp fntest replay verify sndtest port snes-snap clean
 
 all: disasm
 
@@ -87,6 +87,26 @@ verify: build/replay
 	    echo "== $$r"; \
 	    VERIFY_ALL=$(VERIFY_ALL) build/replay $(ROM) build/ref/$$r.events build/ref/$$r.vtrace --verify || exit 1; \
 	done
+
+# ---------------------------------------------------------------- SNES
+# Tools from local checkouts (see tools/snes/Makefile)
+CA65    ?= tools/ext/cc65/bin/ca65
+LD65    ?= tools/ext/cc65/bin/ld65
+SNESCORE ?= tools/ext/snes9x/libretro/snes9x_libretro.so
+
+tools/snes/snesrun: tools/snes/snesrun.c
+	$(MAKE) -C tools/snes snesrun
+
+# A Genesis screen on the SNES: SNAP is a .vdp snapshot from livetest
+# (build/livetest ROM FRAMES INPUT OUTDIR FRAME); writes SNAPDIR/snap.sfc
+# and the SNES's picture of it, SNAPDIR/snes_9.png.
+SNAPDIR ?= $(basename $(SNAP))
+snes-snap: tools/snes/snesrun
+	$(PYTHON) tools/snes/vdp2snes.py $(SNAP) $(SNAPDIR) $(CROP)
+	$(CA65) --cpu 65816 --bin-include-dir $(SNAPDIR) -o $(SNAPDIR)/snap.o snes/snap.s
+	$(LD65) -C snes/snap.cfg -o $(SNAPDIR)/snap.sfc $(SNAPDIR)/snap.o
+	$(PYTHON) tools/snes/checksum.py $(SNAPDIR)/snap.sfc
+	tools/snes/snesrun $(SNESCORE) $(SNAPDIR)/snap.sfc 10 -s 9 -o $(SNAPDIR)/snes
 
 report: check
 	$(PYTHON) tools/shodis.py $(ROM) --report

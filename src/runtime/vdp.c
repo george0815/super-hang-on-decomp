@@ -260,6 +260,8 @@ void vdp_render_line(int line, uint8_t *out)
     uint8_t backdrop = vdp.reg[7] & 0x3f;
     int x, wx0 = 0, wx1 = 0;
 
+    vdp.line_vsram[line][0] = vdp.vsram[0];
+    vdp.line_vsram[line][1] = vdp.vsram[1];
     if (!(vdp.reg[1] & 0x40)) {
         memset(out, backdrop, VDP_WIDTH);
         return;
