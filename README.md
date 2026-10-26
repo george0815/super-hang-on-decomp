@@ -87,12 +87,17 @@ Entry points: entry point `$6BAC`, VBlank `$6D2A`, HBlank `$FF05D2` (RAM copy of
 
 ## Rewriting in readable C
 
-The recompiled code is a stepping stone. Functions are replaced by
-handwritten C in `src/game/`, registered in `config/handwritten.txt`. Each
-handwritten routine is a normal C function; a small `_68k` adapter
-translates to the original register interface for recompiled callers (the
-interface comes from `tools/flow.py`). `make verify` replays the reference
-session and runs every handwritten function next to its original on the same
-inputs, comparing RAM, output registers and hardware accesses. Subsystems are
-rewritten as a whole where possible, so only their entry points need
-adapters.
+All of the 68000 game code is now handwritten C in `src/game/`; the native
+builds (`build/shangon`, `build/livetest`, CMake) run only that C
+(`src/runtime/entry_native.c`). The recompiled code is kept as the
+reference to verify against: each handwritten function is registered in
+`config/handwritten.txt` against its original, with a small `_68k` adapter
+for the original register interface (from `tools/flow.py`). `make verify`
+replays every recorded session (`tests/inputs/*.txt`, recorded with
+`tools/record.sh`) and runs each handwritten function next to its original
+on the same inputs, comparing RAM, output registers and hardware accesses.
+Code that is not a function in the original, such as a game mode's setup up
+to its first VBlank wait, is checked as a segment (`until=` in
+`config/handwritten.txt`). Code that waits for VBlanks (the waits, the
+fade, the frame loops) cannot be compared this way; the functions it calls
+are.

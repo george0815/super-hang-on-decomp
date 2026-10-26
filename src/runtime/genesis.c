@@ -3,7 +3,6 @@
 #include <string.h>
 
 #include "m68k_rt.h"
-#include "sho_funcs.h"
 #include "genesis.h"
 #include "vdp.h"
 #include "sound.h"
@@ -183,7 +182,7 @@ void gen_take_irq(int level, uint32_t pc)
     if (level == 6) {
         if (gen_replay && gen_replay->vblank)
             gen_replay->vblank();
-        f_006D2A();
+        gen_entry_vblank();
     } else {
         hblank_handler();
     }
@@ -294,6 +293,6 @@ void gen_init(const uint8_t *rom, uint32_t size)
 
 void gen_run(void)
 {
-    m68k_dispatch(rd32(4));
+    gen_entry_reset();
     m68k_fault("reset handler returned", cpu.ret);
 }

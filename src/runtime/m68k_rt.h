@@ -47,16 +47,7 @@ extern int64_t m68k_cycles, m68k_cycles_event;
 void m68k_event(uint32_t pc);
 void m68k_idle(uint32_t pc);   /* let time pass to the next event */
 
-#ifdef SHO_PROFILE
-/* instructions executed per word address of the code area (livetest -p) */
-extern uint32_t m68k_profile[0x8000];
-#define PROFILE(pc) (m68k_profile[((pc) & 0xffff) >> 1]++)
-#else
-#define PROFILE(pc) ((void)0)
-#endif
-
 #define HOOK(pc, cyc) do { \
-        PROFILE(pc); \
         if (m68k_icount == m68k_icount_event || m68k_cycles >= m68k_cycles_event) \
             m68k_event(pc); \
         m68k_icount++; \

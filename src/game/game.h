@@ -100,6 +100,7 @@ void records_init(void);
 void pads_init(void);
 void sound_driver_load(void);
 void hblank_install(void);
+void reset(void);
 
 /* ------------------------------------------------------------ audio.c */
 void sound_command(uint8_t command);

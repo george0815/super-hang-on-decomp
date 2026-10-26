@@ -38,4 +38,9 @@ void gen_sound_frame(void);   /* Z80 VBlank interrupt + one frame of audio */
 extern uint8_t gen_frame[320 * 224];
 extern uint8_t z80_ram[0x2000];
 
+/* Per build (entry_native.c, entry_recomp.c): the reset handler and the
+   VBlank interrupt handler. */
+void gen_entry_reset(void);
+void gen_entry_vblank(void);
+
 #endif
