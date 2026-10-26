@@ -20,6 +20,7 @@
 
 extern volatile int sound_verify_running;
 extern int sound_verify_quiet;
+extern long sound_stack_reads;
 long sound_verify_failed(void);
 static int cur_id, cur_round;
 
@@ -234,19 +235,22 @@ int main(int argc, char **argv)
         pid = fork();
         if (pid == 0) {
             seed = (uint32_t)(3 * 256 + k);
+            sound_stack_reads = 0;
             fuzz(k, ticks / 2);
             fflush(stdout);
-            _exit(sound_verify_failed() ? 1 : 0);
+            /* random data read through the stack area can't match: the
+               C driver doesn't keep the original's return addresses */
+            _exit(!sound_verify_failed() ? 0 : sound_stack_reads ? 5 : 1);
         }
         waitpid(pid, &status, 0);
-        if (WIFEXITED(status) && WEXITSTATUS(status) == 3)
+        if (WIFEXITED(status) && (WEXITSTATUS(status) == 3 || WEXITSTATUS(status) == 5))
             hangs++;
         else if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
             printf("fuzz run %d (round 3 id %x): FAILED\n", k, k);
             failures++;
         }
     }
-    printf("%d runs, %d failed, %d skipped (the original hangs or crashes)\n", 3 * NSOUNDS + FUZZ_RUNS,
+    printf("%d runs, %d failed, %d skipped (the original hangs or crashes, or reads its stack)\n", 3 * NSOUNDS + FUZZ_RUNS,
            failures, hangs);
     return failures != 0;
 }

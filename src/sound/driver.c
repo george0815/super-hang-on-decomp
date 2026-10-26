@@ -174,7 +174,8 @@ static void voice_write(uint16_t p, uint8_t ch)
         case 0x4C: T(T_TL4) = v; break;
         case 0xB4: T(T_PAN) = v; break;
         }
-        ym_track((uint8_t)(r + ch), v);
+        /* read again: the track can overlap the table */
+        ym_track((uint8_t)(r + ch), rd((uint16_t)(p + 1)));
     }
 }
 
@@ -431,6 +432,7 @@ static uint8_t redispatch;    /* byte to read again (handlers that jump back) */
 /* What a command handler does next */
 enum {
     H_NEXT,        /* go on with the next byte */
+    H_NEXT_MAIN,   /* the same, in the main parser (from the drum parser too) */
     H_AGAIN,       /* read `redispatch` as if it were the next byte */
     H_DRUM,        /* go on in the drum parser */
     H_END,         /* the track has stopped: end its update */
@@ -510,7 +512,7 @@ static int command(uint8_t cmd)
         for (v = 0; v < 4; v++)
             RAM(0x1C13 + v) = rd((uint16_t)(pos + v));
         pos += 3;
-        return H_NEXT;
+        return H_NEXT_MAIN;
     case 0xE9:                                   /* engine sound off ($06E0) */
         engine_stop();
         pos--;
@@ -797,6 +799,9 @@ cmd:
         pos++;
         if (from_drum)
             goto drum_next;
+        goto next;
+    case H_NEXT_MAIN:
+        pos++;
         goto next;
     case H_AGAIN:
         a = redispatch;

@@ -39,10 +39,15 @@ void z80_fault(const char *what, uint16_t addr)
     exit(2);
 }
 
+long sound_stack_reads;     /* data reads from the stack area ($1F00 on) */
+
 uint8_t z80_read(uint16_t a)
 {
-    if (a < 0x4000)
+    if (a < 0x4000) {
+        if ((a & 0x1fff) >= 0x1f00)
+            sound_stack_reads++;
         return z80_ram[a & 0x1fff];
+    }
     if (a < 0x6000)
         return 0;   /* YM2612 status: never busy, timers handled by the host */
     if (a >= 0x8000)
