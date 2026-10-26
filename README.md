@@ -76,6 +76,12 @@ Differential testing needs Genesis Plus GX cloned into `genesis-plus-gx/`:
     build/replay sho.md build/ref/race.events build/ref/race.vtrace --zram build/ref/race.zram
                    # also compares sound driver RAM at every Z80 interrupt
 
+SNES port (in progress; see [docs/snes-port.md](docs/snes-port.md)). It needs
+cc65 and Snes9x checked out into `tools/ext` (see `tools/snes/Makefile`):
+
+    build/livetest sho.md 1500 tests/inputs/attract.txt build/snap 600
+    make snes-snap SNAP=build/snap/live_00600.vdp   # that screen on the SNES
+
 ## ROM map (so far)
 
 | Range             | Contents                                      |
