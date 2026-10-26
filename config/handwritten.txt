@@ -161,3 +161,5 @@
 00E6A4  records_init_68k
 00817A  pads_init_68k
 006BAC  reset_68k noverify
+006D2A  vblank_entry_68k
+006DD4  fade_out_68k

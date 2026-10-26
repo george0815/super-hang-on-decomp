@@ -227,3 +227,43 @@ void reset(void)
 }
 
 void reset_68k(void) { reset(); }
+
+/* --------------------------------------------------------------- fade */
+
+void palette_dma_68k(void);
+
+/* One colour channel step down ($6E1C): even values, floor 0. */
+static uint16_t channel_down(uint16_t c)
+{
+    c &= 0xE;
+    return c >= 2 ? (uint16_t)(c - 2) : 0;
+}
+
+/*
+ * Fade the whole palette to black ($6DD4): seven steps, each darkening
+ * every channel of the 64 colours by one level, shown every 3 VBlanks.
+ */
+static uint16_t fade_last;
+void fade_out(void)
+{
+    int step, k;
+    wait_vblank();
+    for (step = 0; step < 7; step++) {
+        for (k = 0; k < 64; k++) {
+            uint16_t c = rd16(0xFFD380 + 2 * k);
+            fade_last = (uint16_t)(channel_down(c >> 8) << 8 | channel_down(c >> 4) << 4 | channel_down(c));
+            wr16(0xFFD380 + 2 * k, fade_last);
+        }
+        wait_vblank();
+        wait_vblank();
+        palette_dma_68k();
+    }
+}
+
+void fade_out_68k(void)
+{
+    fade_out();
+    set_dn(0, 2, 0xFFFF);
+    set_dn(1, 2, 0xFFFF);
+    set_dn(5, 2, fade_last);
+}
