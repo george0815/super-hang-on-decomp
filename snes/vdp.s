@@ -24,7 +24,7 @@
 
 .export vdp_reset, vdp_command, vdp_write, vdp_read, vdp_register
 .export vdp_copy, vdp_fill, vdp_copy_rect, vdp_clear, vdp_tiles, vdp_flush
-.export vdp_pending, vdp_on
+.export vdp_pending, tile_gen
 .import upload_vram
 
 ROM_VDP_REGISTER_DEFAULTS = $0086A0     ; 19 register-write words
@@ -110,6 +110,13 @@ vdp_reset:
     inx
     bne :-
     jsr forget_slots
+    ldx #0
+    lda #0
+:   sta f:tile_gen, x
+    inx
+    inx
+    cpx #2048
+    bcc :-
     lda #0                  ; every entry is tile 0: give it slot 0
     jsr convert_entry
     ldx #0
@@ -277,9 +284,18 @@ vram_word:
     jmp map_word
 :   rts
 
-; Mark tile A changed.
+; Mark tile A changed (and count the change, for sprites.s).
 mark_tile:
     pha
+    tax
+    sep #$20
+    .a8
+    lda f:tile_gen, x
+    inc
+    sta f:tile_gen, x
+    rep #$20
+    .a16
+    lda 1, s
     lsr
     lsr
     lsr
@@ -987,5 +1003,6 @@ rows_a:         .res 64             ; a byte per map row: A, then B, window
 rows_b:         .res 64
 rows_w:         .res 32 + 1
 pending:        .res PENDING_SIZE
+tile_gen:       .res 2048           ; a count of each tile's changes
 tile_staging:   .res UPLOAD_TILES * 32
 vsram:          .res $50

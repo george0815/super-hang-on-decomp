@@ -113,10 +113,10 @@ build/snes/assets.o: build/snes/gen/assets.s
 	$(CA65) --cpu 65816 -I build/snes/gen --bin-include-dir build/snes/gen -o $@ $<
 
 build/snes/%.o: snes/%.s $(SNES_INCS)
-	$(CA65) --cpu 65816 -I snes -I build/snes -o $@ $<
+	$(CA65) --cpu 65816 -g -I snes -I build/snes -o $@ $<
 
 build/snes/shangon.sfc: $(SNES_OBJS) snes/shangon.cfg tools/snes/checksum.py
-	$(LD65) -C snes/shangon.cfg -m build/snes/shangon.map -o $@ $(SNES_OBJS)
+	$(LD65) -C snes/shangon.cfg -m build/snes/shangon.map --dbgfile build/snes/shangon.dbg -o $@ $(SNES_OBJS)
 	$(PYTHON) tools/snes/checksum.py $@
 
 # Screenshots of the SNES build: SHOTS frames of a FRAMES-frame run with

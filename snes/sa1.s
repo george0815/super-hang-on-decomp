@@ -13,9 +13,10 @@
 .include "inc/dp.inc"
 .include "inc/macros.inc"
 
-.export sa1_reset, wait_vblank, upload_vram, upload_flush
+.export sa1_reset, wait_vblank, upload, upload_vram, upload_flush
 .export mode_first_call, mode_setup_done
 .import logo_mode, title_mode, vdp_flush, vdp_pending, vdp_reset, display_on
+.import sprites_reset
 
 
 ; direct page (SA1_DP + offset)
@@ -57,6 +58,7 @@ sa1_reset:
     bne :-
     stz up_pos
     stz z:vdp_on
+    jsr sprites_reset
 
 main_loop:
     sep #$20
