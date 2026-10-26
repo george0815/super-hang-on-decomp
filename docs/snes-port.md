@@ -82,6 +82,31 @@ overlap, so a line needs at most 32 slices. The port will cut every
 sprite frame (bike, rivals, scenery sizes) on a 16-pixel grid at build
 time, relative to its origin.
 
+**Sprite frames at run time.** Objects show sprite maps: lists of pieces
+of 1 to 4 tiles a side, at offsets from the object, with tiles counted
+from the object's tile base. `build/spritecat` plays input scripts and
+lists every distinct map, tile base and tile contents shown. Five
+recordings (attract, courses, rival_lose, goal, dirt) show 914 frames
+from 344 maps, 47,000 tiles in all. Most frames are 32x32 or smaller;
+two maps are 224x192.
+- 314 of the 344 maps put every piece on one 8-pixel grid with no overlap.
+  For these, the SNES can cut the frame into 16x16 OBJs by moving whole
+  tiles. The plan: keep a SNES-format copy of the sprite tiles in BW-RAM,
+  indexed by Genesis tile number. A frame that comes into view gets OBJ
+  VRAM slots, and the NMI copies its tiles there tile by tile. A frame
+  stays cached while it is on screen.
+- The other 30 (some small maps, and the two big ones) need their pixels
+  combined, either on the SA-1 or at build time.
+- OBJ VRAM holds 512 tiles. A snapshot shows 43-68 distinct sprite tiles
+  at once, and a race frame lasts three VBlanks, each able to upload
+  about 170 tiles, so streaming keeps up.
+
+**Background tiles.** A screen shows at most about 200 distinct background
+tiles, but their Genesis tile numbers go up to 1790, and SNES BG tile
+numbers stop at 1023. Each mode will renumber them by 16-tile blocks.
+Name table entries written at run time, such as HUD digits, go through
+the same table.
+
 **Road.** The race builds per-line tables: bend (`$FF0B00`), centre
 (`$FF0D00`) and the road line drawn on each screen row (`$FF1300`). From
 them it fills the per-line horizontal scroll and a per-line vertical
@@ -113,11 +138,11 @@ approximated by samples and the DSP's ADSR.
 ## Milestones
 
 1. Done: toolchain, headless runner, screen converter and viewer.
-2. SA-1 skeleton: boot both CPUs, a VBlank upload queue, pad reading,
-   and asset conversion from `sho.md` at build time (Nemesis decoding,
-   tiles, palettes, maps).
-3. Logo and title screens running as code (`mode_logo`, `mode_title`),
-   compared with the recordings' screenshots.
+2. Done: SA-1 skeleton. Both CPUs boot, there is a VBlank upload queue
+   with PPU register shadows, the pad is read, and assets are extracted
+   from `sho.md` at build time (Nemesis decoding).
+3. Logo done: `snes/logo.s` matches the Genesis frame for frame (three
+   frames later). Title next, which needs the object system and sprites.
 4. Race renderer: road by HDMA, sprite frames, HUD.
 5. Race logic, compared variable by variable with the recordings.
 6. Menus: course and music select, password, shop, ranking, options.

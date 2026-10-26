@@ -71,6 +71,9 @@ build/shangon: $(PORTSRC) src/port/options.h $(RUNTIME) $(RTHDRS) src/runtime/en
 
 port: build/shangon
 
+build/spritecat: tests/spritecat.c $(RUNTIME) $(RTHDRS) src/runtime/entry_native.c
+	$(CC) $(RCFLAGS) -o $@ tests/spritecat.c $(RUNTIME) src/runtime/entry_native.c -lm
+
 build/livetest: tests/livetest.c $(RUNTIME) $(RTHDRS) src/runtime/entry_native.c
 	$(CC) $(RCFLAGS) -o $@ tests/livetest.c $(RUNTIME) src/runtime/entry_native.c -lm
 
