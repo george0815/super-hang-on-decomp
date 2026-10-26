@@ -97,7 +97,7 @@ void music_draw_68k(void)
  * The screen's graphics ($7F2E): four Nemesis sets, 25 tiles copied
  * within VRAM, and the palette.
  */
-static void music_graphics(void)
+void music_graphics(void)
 {
     uint32_t src = 0x200000, dst = 0x50600003;
     int k;
@@ -146,3 +146,43 @@ static void music_select_frame(void)
 }
 
 void music_select_frame_68k(void) { music_select_frame(); }
+
+/* Step the tune choice by d and play it ($7E08). */
+static void music_step(int d)
+{
+    wr16(MUSIC_CHOICE, (uint16_t)((rd16(MUSIC_CHOICE) + d) & 3));
+    wr8(0xFF0518, rd8(ROM_MUSIC_SOUNDS + rd16(MUSIC_CHOICE)));
+    sound_command(rd8(0xFF0518));
+}
+
+/* The music select screen's setup ($7E8E, with interrupts masked); the
+   first tune starts playing. */
+static void music_select_setup(void)
+{
+    screen_reset();
+    music_names();
+    map_unpack(0x03D718);
+    wr32(VDP_CTRL, 0x40000000);
+    nemesis_to_vdp(0x03DA6E);
+    vdp_copy(0x521C0003, 0x007F16, 12);
+    palette_load(0x008E56);
+    palette_load(0x03D70E);
+    wr16(0xFFD3E0, 0x00AE);
+    wr16(MUSIC_CHOICE, 0xFFFF);
+    wr32(0xFFC718, 0x1101);              /* countdown 11 */
+    music_step(1);
+}
+
+void music_select_setup_68k(void) { music_select_setup(); }
+
+/* Game mode $0C ($6CFE): the setup, or one frame. */
+void mode_music_select_68k(void)
+{
+    if (mode_first_call()) {
+        music_select_setup();
+        mode_setup_done(4);
+        return;
+    }
+    wait_vblank();
+    music_select_frame();
+}

@@ -338,3 +338,102 @@ static void course_select_frame(void)
 }
 
 void course_select_frame_68k(void) { course_select_frame(); }
+
+/* ------------------------------------------------------------ setup */
+
+/*
+ * The title screen's setup ($793E, with interrupts masked): the
+ * background, menu graphics, logo tiles and texts, the palette, and the
+ * demo after 3 seconds.
+ */
+static void title_setup(void)
+{
+    int k;
+    screen_reset();
+    wr16(SOUND_LOCKED, 0);
+    wr16(0xFFC82C, 0);
+    wr16(0xFFC8B6, 0);
+    wr32(VDP_CTRL, 0x40000000);
+    nemesis_to_vdp(0x01E07C);
+    map_unpack(0x01E03C);
+    music_graphics();
+    wr16(0xFFD3C4, 0x00EE);
+    wr32(VDP_CTRL, 0x62400001);
+    nemesis_to_vdp(0x04BC00);
+    objects_clear();
+    wr16(TITLE_STEP, 0);
+    vdp_copy_rect(0x62160003, 0xFFEBB0, 16, 3);
+    vdp_copy_rect(0x5A1E0003, 0xFFEB60, 10, 4);
+    vdp_fill(0x40000000, 0x1111, 0x20);
+    vdp_copy(0x57A00003, 0x007ABC, 8);
+    vdp_copy(0x58A00003, 0x007ACC, 8);
+    vdp_copy(0x5CB60003, 0x007AA6, 11);
+    wr32(VDP_CTRL, 0x66460003);
+    wr32(VDP_DATA, 0xE631E62A);
+    palette_load(0x0078D6);
+    for (k = 0; k < 7; k++) {
+        wr16(0xFFD3B0 + 2 * k, rd16(0x00790C + 2 * k));
+        wr16(0xFFD3A2 + 2 * k, rd16(0x007926 + 2 * k));
+    }
+    wr16(0xFFC82A, 0xB4);                /* demo delay */
+    wr16(0xFFC70E, 0);
+    wr16(0xFFC710, 0);
+    wr16(0xFFC71C, 0x23);
+    wr16(MENU_STATE, 0);
+}
+
+void title_setup_68k(void) { title_setup(); }
+
+/* Game mode 4 ($6CF6): the setup, or one frame. */
+void mode_title_68k(void)
+{
+    if (mode_first_call()) {
+        title_setup();
+        mode_setup_done(4);
+        return;
+    }
+    wait_vblank();
+    title_frame();
+}
+
+/* The course select labels ($7C5E, 16 bytes apart): VRAM command, word
+   count, text; drawn last to first. */
+static const struct { uint32_t cmd; uint16_t count; uint32_t src; } course_labels[9] = {
+    { 0x55A20003, 9, 0x007D9A }, { 0x568C0003, 9, 0x007D88 }, { 0x54B20003, 9, 0x007D76 },
+    { 0x58A20003, 8, 0x007D66 }, { 0x55240003, 6, 0x007D5A }, { 0x560E0003, 6, 0x007D4E },
+    { 0x54340003, 6, 0x007D42 }, { 0x58220003, 8, 0x007D32 }, { 0x51980003, 17, 0x007CEE },
+};
+
+/* The course select screen's setup ($7BD8, with interrupts masked);
+   Africa first, a countdown of 16 and its music. */
+static void course_select_setup(void)
+{
+    int k;
+    screen_reset();
+    wr32(VDP_CTRL, 0x40000000);
+    nemesis_to_vdp(0x03DA6E);
+    map_unpack(0x03D718);
+    vdp_copy_rect(0x63060003, 0xFFEB00, 0x22, 0x12);
+    for (k = 8; k >= 0; k--)
+        vdp_copy(course_labels[k].cmd, course_labels[k].src, course_labels[k].count);
+    palette_load(0x008E56);
+    palette_load(0x03D704);
+    wr16(0xFFD3E0, 0x0ECA);
+    wr16(COURSE, 0);
+    wr32(0xFFC718, 0x1601);              /* countdown 16 */
+    sound_command(0x81);
+}
+
+void course_select_setup_68k(void) { course_select_setup(); }
+
+/* Game mode 8 ($6CFA): the setup, or one frame. */
+void mode_course_select_68k(void)
+{
+    if (mode_first_call()) {
+        course_select_setup();
+        mode_setup_done(4);
+        return;
+    }
+    wait_vblank();
+    course_select_frame();
+}

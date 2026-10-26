@@ -163,5 +163,13 @@
 006BAC  reset_68k noverify
 006D2A  vblank_entry_68k
 006DD4  fade_out_68k
+# Game modes: each mode's setup is a segment ending where it unmasks
+# interrupts (andi #$F8FF,sr, which carries x along: a false dependency)
 006CF2  mode_logo_68k
 00739A  logo_setup_68k  until=007474
+006CF6  mode_title_68k
+00793E  title_setup_68k  until=007A60
+006CFA  mode_course_select_68k
+007BD8  course_select_setup_68k  until=007C4C
+006CFE  mode_music_select_68k
+007E8E  music_select_setup_68k  until=007EEE  ignore=x
