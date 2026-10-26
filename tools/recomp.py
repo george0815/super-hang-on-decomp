@@ -439,6 +439,12 @@ class FuncGen:
                 out.append('cpu.a[%d] = ea;' % mem.reg)
 
     def goto(self, t):
+        # a segment is called without a return address on the stack (an
+        # interrupt inside it must see the original's stack)
+        if t == UNTIL.get(self.entry):
+            return '{ cpu.ret = seg_ret; return; }'
+        if t != self.entry and t in UNTIL and t in self.rg.hand:
+            return '{ %s(); goto L_%06X; }' % (self.rg.fname(t), UNTIL[t])
         if t != self.entry and t in self.rg.hand:
             # a handwritten function: tail call it rather than copy its original
             return '{ %s(); return; }' % self.rg.fname(t)
@@ -451,6 +457,9 @@ class FuncGen:
         body = self.rg.body(self.entry, self.rg.hand)
         order = sorted(body)
         out = ['%svoid %s(void)' % (storage, name or self.rg.fname(self.entry)), '{']
+        if self.entry in UNTIL:
+            # cpu.ret as the segment found it: its calls are internal
+            out.append('    uint32_t seg_ret = cpu.ret;')
         if self.entry != order[0]:
             out.append('    goto L_%06X;' % self.entry)
         for k, a in enumerate(order):
@@ -469,7 +478,7 @@ class FuncGen:
             if not ends:
                 nxt = a + i.size
                 if k + 1 >= len(order) or order[k + 1] != nxt:
-                    if nxt in body or nxt in self.rg.hand:
+                    if nxt in body or nxt in self.rg.hand or nxt == UNTIL.get(self.entry):
                         out.append('    ' + self.goto(nxt))
                     else:
                         out.append('    m68k_fault("ran off end of code", %s); return;' % hx(nxt))
@@ -478,13 +487,18 @@ class FuncGen:
 
 
 NOVERIFY = set()
+UNTIL = {}      # segment entry -> address where it hands back (see load_handwritten)
 
 
 def load_handwritten(path, with_ignore=False):
     """config/handwritten.txt: ADDR c_function_name [ignore=part,part...] [noverify]
+    [until=END]
     ignore lists outputs left out of verification (each needs a reason in a
     comment): e.g. d4.hi, d1.b1, x. noverify: verify builds always run the
-    original (for code that never returns, like the main loop)"""
+    original (for code that never returns, like the main loop). until: a
+    segment, code from ADDR (a code entry) up to END that is not a function in
+    the original; recompiled code calls the C for it and goes on at END
+    (also a code entry), so the stretch before a VBlank wait can be verified"""
     out, ignore = {}, {}
     if os.path.exists(path):
         for ln in open(path):
@@ -497,6 +511,8 @@ def load_handwritten(path, with_ignore=False):
                         ignore[int(f[0], 16)] = parse_parts(extra[7:])
                     elif extra == 'noverify':
                         NOVERIFY.add(int(f[0], 16))
+                    elif extra.startswith('until='):
+                        UNTIL[int(f[0], 16)] = int(extra[6:], 16)
     return (out, ignore) if with_ignore else out
 
 
@@ -536,7 +552,11 @@ class Recompiler:
         st = [f]
         while st:
             a = st.pop()
-            if a in seen or a not in x.insns or (a != f and a in stop):
+            if a in seen or a not in x.insns or a == UNTIL.get(f):
+                continue
+            if a != f and a in stop:
+                if a in UNTIL:
+                    st.append(UNTIL[a])   # called as a segment, then on from its end
                 continue
             seen.add(a)
             i = x.insns[a]
@@ -546,6 +566,11 @@ class Recompiler:
                 continue
             st.append(a + i.size)
         return seen
+
+    def outputs(self, flow, f):
+        """what verification compares: for a segment, what the code at its
+        end reads"""
+        return flow.inputs[UNTIL[f]] if f in UNTIL else flow.local[f]
 
     def entries(self):
         return sorted(f for f in self.dis.funcs if f in self.dis.insns)
@@ -585,14 +610,15 @@ class Recompiler:
                     c.write('void %s(void);\n' % name)
                     # the handwritten function does the work; the wrapper
                     # returns like the original (pops the caller's address)
-                    c.write('static void h_%06X(void) { %s(); cpu.ret = pop32(); }\n' % (f, name))
+                    c.write('static void h_%06X(void) { %s();%s }\n' % (
+                        f, name, '' if f in UNTIL else ' cpu.ret = pop32();'))
                     c.write('#ifdef SHO_VERIFY\n')
                     c.write(FuncGen(self, f).generate('o_%06X' % f, 'static '))
                     if f in NOVERIFY:
                         c.write('\nvoid %s(void) { (void)h_%06X; o_%06X(); }\n' % (self.fname(f), f, f))
                     else:
                         c.write('\nvoid %s(void) { verify_call(0x%06X, "%s", o_%06X, h_%06X, 0x%XULL); }\n' % (
-                            self.fname(f), f, name, f, f, flow.local[f] & ~ignore.get(f, 0)))
+                            self.fname(f), f, name, f, f, self.outputs(flow, f) & ~ignore.get(f, 0)))
                     c.write('#else\nvoid %s(void) { h_%06X(); }\n#endif\n\n' % (self.fname(f), f))
                     continue
                 c.write(FuncGen(self, f).generate())

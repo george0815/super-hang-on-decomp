@@ -163,3 +163,5 @@
 006BAC  reset_68k noverify
 006D2A  vblank_entry_68k
 006DD4  fade_out_68k
+006CF2  mode_logo_68k
+00739A  logo_setup_68k  until=007474

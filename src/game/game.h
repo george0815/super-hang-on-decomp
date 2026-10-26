@@ -22,6 +22,19 @@ static inline void call68k(void (*fn)(void))
     fn();
 }
 
+/* A game mode's first call ($C705 bit 0 clear): sets the bit, so the
+   mode's setup runs once. */
+static inline int mode_first_call(void)
+{
+    uint8_t v = rd8(0xFFC705);
+    wr8(0xFFC705, v | 1);
+    return !(v & 1);
+}
+
+/* The end of most game modes' setup: interrupts on with the given VBlank
+   handler, then after the next VBlank the display on. */
+void mode_setup_done(uint16_t vblank_handler);
+
 /* ------------------------------------------------------- work RAM map */
 
 #define VDP_MODE_SHADOW   0xFFC700  /* copies of the VDP mode register commands
@@ -87,6 +100,9 @@ void sound_command(uint8_t command);
 void vblank_menu(void);
 void vblank_race(void);
 uint16_t char_tile(uint8_t c);
+void screen_reset(void);
+void display_on(void);
+void display_off(void);
 
 /* ------------------------------------------------------------- race.c */
 void race_place_objects(void);
@@ -111,5 +127,6 @@ void time_tiles(uint32_t time, uint32_t dst);
 void obj_add_to_layer(uint32_t obj);
 void objects_update(void);
 void score_add(void);
+void objects_clear(void);
 
 #endif

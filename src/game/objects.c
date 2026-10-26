@@ -96,11 +96,16 @@ void obj_free_68k(void)
 }
 
 /* Clear every object ($70FC). */
-void objects_clear_68k(void)
+void objects_clear(void)
 {
     int k;
     for (k = 0; k < OBJ_COUNT; k++)
         obj_free(OBJECTS + k * OBJ_SIZE);
+}
+
+void objects_clear_68k(void)
+{
+    objects_clear();
     cpu.a[0] = OBJECTS + OBJ_COUNT * OBJ_SIZE;
     cpu.d[1] = 0;
     set_dn(0, 2, 0xFFFF);

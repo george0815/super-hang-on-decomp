@@ -200,3 +200,66 @@ static void logo_frame(void)
 }
 
 void logo_frame_68k(void) { logo_frame(); }
+
+/* ------------------------------------------------------------ setup */
+
+/*
+ * The logo screen's setup ($739A, with interrupts masked): the
+ * bitmap unpacked to RAM and an empty copy shown, a 12 x 4 tile block on
+ * plane A (the lower half flipped vertically), palettes 0-1 black with
+ * colour 1 white, one walker at the logo's first pixel, the rest free.
+ */
+static void logo_setup(void)
+{
+    uint16_t tile = 1;
+    uint32_t cmd = 0x561C0003;
+    int half, row, k;
+    screen_reset();
+    sound_command(0xB1);
+    wr32(VDP_CTRL, 0x50000000);
+    nemesis_to_vdp(0x01E84E);
+    nemesis_to_ram(0x020A56, LOGO_BITMAP);
+    for (k = 0; k < 0x188; k++)
+        wr32(LOGO_SHOWN + 4 * k, 0);
+    vdp_logo_tiles(LOGO_SHOWN);
+    for (half = 0; half < 2; half++) {
+        for (row = 0; row < 2; row++, cmd += 0x800000) {
+            wr32(VDP_CTRL, cmd);
+            for (k = 0; k < 12; k++)
+                wr16(VDP_DATA, tile++);
+        }
+        tile |= 0x2000;
+    }
+    for (k = 0; k < 2; k++) {
+        int j;
+        wr32(0xFFD380 + 0x20 * k, 0x0EEE);
+        for (j = 1; j < 8; j++)
+            wr32(0xFFD380 + 0x20 * k + 4 * j, 0);
+    }
+    wr16(LOGO_WALKER_COUNT, 1);
+    wr32(LOGO_WALKERS, rd32(0x008142));
+    wr32(LOGO_WALKERS + 4, rd32(0x008146));
+    for (k = 1; k < 32; k++)
+        wr16(LOGO_WALKERS + 8 * k, 0xFFFF);
+    wr16(0xFFC70E, 0);
+    wr16(0xFFC710, 0x0D);
+    wr16(0xFFC714, 0);
+    wr16(0xFFC71C, 0);
+    wr16(SOUND_LOCKED, 0);
+    wr16(0xFFC82C, 0);
+    wr16(0xFFC8B6, 0);
+}
+
+void logo_setup_68k(void) { logo_setup(); }
+
+/* Game mode 0 ($6CF2): the setup, or one frame. */
+void mode_logo_68k(void)
+{
+    if (mode_first_call()) {
+        logo_setup();
+        mode_setup_done(4);
+        return;
+    }
+    wait_vblank();
+    logo_frame();
+}

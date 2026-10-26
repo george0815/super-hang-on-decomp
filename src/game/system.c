@@ -228,6 +228,14 @@ void reset(void)
 
 void reset_68k(void) { reset(); }
 
+void mode_setup_done(uint16_t vblank_handler)
+{
+    set_sr(get_sr() & 0xF8FF);
+    wr16(0xFFC722, vblank_handler);
+    wait_vblank();
+    display_on();
+}
+
 /* --------------------------------------------------------------- fade */
 
 void palette_dma_68k(void);

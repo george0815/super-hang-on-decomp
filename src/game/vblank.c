@@ -136,9 +136,10 @@ static void plane_a_fill(uint16_t entry)
  * and the pattern area at $8000 to zero; plane A gets entry $E000.
  * Interrupts stay masked for the mode's setup.
  */
-static void screen_reset(void)
+void screen_reset(void)
 {
     int k;
+    set_sr(get_sr() | 0x700);
     wr8(VDP_MODE_SHADOW + 3, rd8(VDP_MODE_SHADOW + 3) & ~0x40);
     wr16(VDP_CTRL, rd16(VDP_MODE_SHADOW + 2));
     wr16(VDP_CTRL, 0x8AFF);
@@ -154,7 +155,6 @@ static void screen_reset(void)
 
 void screen_reset_68k(void)
 {
-    set_sr(get_sr() | 0x700);
     screen_reset();
     set_dn(5, 2, 0xE000);
     cpu.d[4] = 0xFFFF;
@@ -538,12 +538,20 @@ void hex_tiles_4_68k(void)
     cpu.x = 0;
 }
 
-/* Display off ($8438). */
-void display_off_68k(void)
+/* Display on ($8430) and off ($8438). */
+void display_on(void)
+{
+    wr8(VDP_MODE_SHADOW + 3, rd8(VDP_MODE_SHADOW + 3) | 0x40);
+    wr16(VDP_CTRL, rd16(VDP_MODE_SHADOW + 2));
+}
+
+void display_off(void)
 {
     wr8(VDP_MODE_SHADOW + 3, rd8(VDP_MODE_SHADOW + 3) & ~0x40);
     wr16(VDP_CTRL, rd16(VDP_MODE_SHADOW + 2));
 }
+
+void display_off_68k(void) { display_off(); }
 
 void hex_tiles_shown_68k(void)
 {
