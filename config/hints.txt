@@ -68,3 +68,10 @@ code 0065AA ShopSetup
 code 006648
 code 006652 ShopSetup2
 code 006770
+code 004F62 PasswordSetup
+code 005056
+code 00505A PasswordSetup2
+code 005082
+code 006A3E OptionsSetup
+code 006A6C
+code 00E1A4 RankingInsert

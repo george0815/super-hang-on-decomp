@@ -295,3 +295,69 @@ void mode_ranking_68k(void)
     wait_frame_ticks();
     ranking_frame();
 }
+
+/* An entry: score, ?, blank name, ? ($E232). */
+static void ranking_entry_write(uint32_t e, uint32_t score)
+{
+    wr32(e, score);
+    wr16(e + 4, rd16(0xFF052E));
+    wr32(e + 6, 0x20202020);
+    wr32(e + 10, rd32(0xFF04EC));
+}
+
+/*
+ * After a game ($E1A4, game mode $34): the score goes into the course's
+ * ranking table (7 entries of 14 bytes, $70 per course) and, if it made
+ * the table, name entry is set up at its row; then the ranking screen
+ * (mode $20 with its setup done: $21) shows the table and the score.
+ */
+static void ranking_insert(void)
+{
+    uint32_t score = rd32(0xFF054C);
+    uint32_t table = 0xFF0200 + (uint16_t)(rd16(0xFF060C) * 0x70), rows;
+    uint16_t rank = 0;
+    wr16(0xFFC900, 0);
+    wr8(0xFFC755, 0xFF);
+    wr16(0xFFC70E, rd16(0xFF060C));
+    wr32(0xFFC716, 0xFF3000);
+    wr16(0xFFC71C, 1);
+    while (rank < 7 && score < rd32(table + 14 * rank))
+        rank++;
+    if (rank == 7) {
+        ranking_entry_write(table + 0x62, score);
+    } else {
+        uint16_t vram = (uint16_t)(0xD480 + rank * 0x100 + 0x32);
+        int k;
+        for (k = 6 * 14 - 1; k >= 14 * rank; k--)
+            wr8(table + 14 + k, rd8(table + k));
+        ranking_entry_write(table + 14 * rank, score);
+        wr8(NAME_ENTRY + 0x0C, 0x30);
+        wr8(NAME_ENTRY + 0x0D, 0x1D);
+        wr32(NAME_ENTRY, 0);
+        wr32(NAME_ENTRY + 4, 0);
+        wr32(0xFFC8B0, table + 14 * rank + 6);
+        wr32(0xFFC8AC, (0x4000u | (vram & 0x3FFF)) << 16 | vram >> 14);
+        sound_command(0x87);
+        wr16(RANKING_MODE, rd16(RANKING_MODE) + 1);
+    }
+    wr16(RANKING_MODE, rd16(RANKING_MODE) + 1);
+    wr16(0xFFC71A, 3);
+    rows = ranking_rows(0xFF2FC8, table) + 0x38;
+    wr32(rows, 0xA636A62C);
+    wr32(rows + 4, 0xA632A638);
+    hex_tiles(rows + 8, rd32(0xFF054C), 8, 0xE0, 0);
+    wr16(0xFFC704, 0x21);
+}
+
+void ranking_insert_68k(void) { ranking_insert(); }
+
+/* Game mode $34 ($6D26): the ranking insertion, then (while it is still
+   the mode) frames go by. */
+void mode_ranking_insert_68k(void)
+{
+    if (mode_first_call()) {
+        ranking_insert();
+        return;
+    }
+    wait_frame_ticks();
+}

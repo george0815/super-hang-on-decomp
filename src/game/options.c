@@ -82,3 +82,28 @@ static void options_frame(void)
 }
 
 void options_frame_68k(void) { options_frame(); }
+
+/* The options screen's setup ($6A3E, with interrupts masked). */
+static void options_setup(void)
+{
+    screen_reset();
+    vdp_fill(0x40000000, 0, 0x20);
+    palette_load(0x008E56);
+    wr16(0xFFD3E0, 0x0220);
+    wr16(0xFFC70E, 0);
+    wr16(0xFFC710, 0);
+}
+
+void options_setup_68k(void) { options_setup(); }
+
+/* Game mode $30 ($6D22): the setup, or one frame. */
+void mode_options_68k(void)
+{
+    if (mode_first_call()) {
+        options_setup();
+        mode_setup_done(4);
+        return;
+    }
+    wait_vblank();
+    options_frame();
+}

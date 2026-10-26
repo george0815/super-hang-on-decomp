@@ -164,27 +164,36 @@
 006D2A  vblank_entry_68k
 006DD4  fade_out_68k
 # Game modes: each mode's setup is a segment ending where it unmasks
-# interrupts
-006CF2  mode_logo_68k
+# interrupts. The modes' d1/d4/d5 outputs are dead: the main loop only
+# carries them into the next mode call, and no mode reads them first
+# (flow.py cannot tell which mode comes next)
+006CF2  mode_logo_68k  ignore=d1,d4,d5
 00739A  logo_setup_68k  until=007474
-006CF6  mode_title_68k
+006CF6  mode_title_68k  ignore=d1,d4,d5
 00793E  title_setup_68k  until=007A60
-006CFA  mode_course_select_68k
+006CFA  mode_course_select_68k  ignore=d1,d4,d5
 007BD8  course_select_setup_68k  until=007C4C
-006CFE  mode_music_select_68k
+006CFE  mode_music_select_68k  ignore=d1,d4,d5
 007E8E  music_select_setup_68k  until=007EEE
-006D02  mode_race_start_68k
+006D02  mode_race_start_68k  ignore=d1,d4,d5
 00872E  race_setup_68k  until=0088CA
-006D06  mode_demo_68k
+006D06  mode_demo_68k  ignore=d1,d4,d5
 0089EE  demo_setup_68k  until=008AA6
-006D0A  mode_race_68k
-006D12  mode_ranking_68k
+006D0A  mode_race_68k  ignore=d1,d4,d5
+006D12  mode_ranking_68k  ignore=d1,d4,d5
 00DB14  ranking_setup_68k
-006D16  mode_command_68k
+006D16  mode_command_68k  ignore=d1,d4,d5
 005AD6  command_setup_68k  until=005DB4
 005DB8  command_setup_2_68k  until=005F0A
 005F3E  parts_wear_68k  until=005F68
 005F8C  parts_wear_adjust_68k  until=005FCA
-006D1A  mode_shop_68k
+006D1A  mode_shop_68k  ignore=d1,d4,d5
 0065AA  shop_setup_68k  until=006648
 006652  shop_setup_2_68k  until=006770
+006D1E  mode_password_68k  ignore=d1,d4,d5
+004F62  pw_setup_68k  until=005056
+00505A  pw_setup_2_68k  until=005082
+006D22  mode_options_68k  ignore=d1,d4,d5
+006A3E  options_setup_68k  until=006A6C
+006D26  mode_ranking_insert_68k  ignore=d1,d4,d5
+00E1A4  ranking_insert_68k

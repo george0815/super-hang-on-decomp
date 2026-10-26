@@ -317,3 +317,72 @@ void pw_frame_68k(void)
     if (pw_frame_unmasked)
         pw_regs();
 }
+
+/* ------------------------------------------------------------ setup */
+
+/*
+ * The password screen's setup ($4F62, with interrupts masked): with a
+ * cheat flag in $FFC7DE a ready-made password, the windows, title and
+ * the letter grid (4 rows of 9, each letter 3 cells apart).
+ */
+static void pw_setup(void)
+{
+    uint32_t src = 0, cmd = 0x530E0003;
+    uint16_t tile = 0x614, i = 0;
+    int row, k;
+    screen_reset();
+    if (rd8(0xFFC7DE) & 0x40)
+        src = 0x00526C;
+    else if (rd8(0xFFC7DE) & 1)
+        src = 0x005288;
+    if (src)
+        for (k = 0; k < 28; k++)
+            wr8(PW_CODES + k, rd8(src + k));
+    vdp_fill(0x40000000, 0, 0x20);
+    vdp_fill(0x60000003, 0xA358, 0x700);
+    vdp_copy_rect(0x5BAE0003, 0x005146, 10, 3);
+    window_tall(0x67080003, 0x1D);
+    window_tall(0x6AAA0003, 0x0C);
+    vdp_copy(0x518E0003, 0x005094, 0x19);
+    for (row = 0; row < 4; row++, cmd += 0x1000000) {
+        wr32(VDP_CTRL, cmd);
+        for (k = 0; k < 9; k++, tile++, i += 2) {
+            wr16(VDP_DATA, (uint16_t)(rd16(0x005224 + i) + tile));
+            wr16(VDP_DATA, 0);
+            wr16(VDP_DATA, 0);
+        }
+    }
+    palette_load(0x014208);
+}
+
+void pw_setup_68k(void) { pw_setup(); }
+
+/* After the password rows ($505A): nothing entered yet. */
+static void pw_setup_2(void)
+{
+    wr8(PW_POSITION, 0);
+    wr16(PW_COUNT, 0xFFFF);
+    wr16(PW_CHOICE, 0);
+    wr16(PW_STATE, 0);
+    wr32(0xFFB63C, 0);
+    sound_command(0x8A);
+}
+
+void pw_setup_2_68k(void) { pw_setup_2(); }
+
+/* Game mode $2C ($6D1E): the setup, or one frame. */
+void mode_password_68k(void)
+{
+    if (mode_first_call()) {
+        pw_setup();
+        pw_rows();
+        pw_regs();                       /* the row code unmasks */
+        pw_setup_2();
+        mode_setup_done(4);
+        return;
+    }
+    wait_vblank();
+    pw_frame();
+    if (pw_frame_unmasked)
+        pw_regs();
+}

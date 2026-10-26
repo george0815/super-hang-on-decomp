@@ -126,6 +126,7 @@ void hud_numbers(void);
 void menu_countdown(void);
 void push_start_blink(void);
 void window_columns(uint32_t cmd, int steps);
+void window_tall(uint32_t cmd, int steps);
 void music_graphics(void);
 void password_check(uint8_t *hi, uint8_t *lo);
 void hud_curtain(void);

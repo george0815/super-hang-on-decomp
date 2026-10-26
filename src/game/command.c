@@ -481,11 +481,16 @@ void password_check_68k(void)
 }
 
 /* A taller window ($5182). */
+void window_tall(uint32_t cmd, int steps)
+{
+    window_frame(cmd, steps, 0x0051B2, 0x0051C0, 7);
+}
+
 void window_tall_68k(void)
 {
     uint32_t cmd = cpu.d[7];
     int steps = (uint16_t)cpu.d[4] + 1;
-    window_frame(cmd, steps, 0x0051B2, 0x0051C0, 7);
+    window_tall(cmd, steps);
     cpu.d[7] = cmd + 0x20000u * steps + 0x3800000;
     set_dn(4, 2, 0xFFFF);
 }
