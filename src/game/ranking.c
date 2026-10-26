@@ -263,3 +263,35 @@ void ranking_tables_init(void)
 }
 
 void ranking_tables_init_68k(void) { ranking_tables_init(); }
+
+/*
+ * The ranking screen's setup ($DB14): sound locked, the first page, and
+ * the rows of the four ranking tables (offsets at $DC50) drawn into RAM.
+ */
+static void ranking_setup(void)
+{
+    uint32_t rows = 0xFF2FC8;
+    int k;
+    wr16(RANKING_MODE, 0);
+    wr16(SOUND_LOCKED, 0xFFFF);
+    wr16(0xFFC756, 0xFFFF);
+    wr16(0xFFC70E, 0);
+    wr16(0xFFC71A, 0);
+    wr32(0xFFC716, 0xFF3000);
+    wr16(0xFFC71C, 0x1E);
+    for (k = 0; k < 4; k++)
+        rows = ranking_rows(rows, 0xFF0200 + (int16_t)rd16(0x00DC50 + 2 * k));
+}
+
+void ranking_setup_68k(void) { ranking_setup(); }
+
+/* Game mode $20 ($6D12): the setup, or one frame. */
+void mode_ranking_68k(void)
+{
+    if (mode_first_call()) {
+        ranking_setup();
+        return;
+    }
+    wait_frame_ticks();
+    ranking_frame();
+}

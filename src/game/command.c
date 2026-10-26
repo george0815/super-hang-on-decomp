@@ -70,7 +70,7 @@ static void window_frame(uint32_t cmd, int steps, uint32_t left, uint32_t body, 
     }
 }
 
-static void window_columns(uint32_t cmd, int steps)
+void window_columns(uint32_t cmd, int steps)
 {
     window_frame(cmd, steps, 0x006088, 0x006094, 6);
 }
@@ -544,6 +544,212 @@ static void command_frame(void)
 
 void command_frame_68k(void)
 {
+    command_frame();
+    set_sr(get_sr() & 0xF8FF);
+}
+
+/* ------------------------------------------------------------ setup */
+
+#define MECHANIC_RANK    0xFFB60A
+#define RACE_TIME        0xFFB63C   /* BCD long: the last race's time, 0 = none */
+#define RIVAL_TIME       0xFFB640   /* BCD long */
+#define COMMAND_FLAGS    0xFFB655   /* bit 0: results already counted,
+                                       bit 1: a race was run (parts wear) */
+#define PARTS_WEAR       0xFFB648   /* six words, negative = not fitted */
+
+/* Money += the sponsor's prize in column `col` (BCD longs, 16 bytes per
+   sponsor at $15784), unless the results were counted already; returns
+   the carry out. */
+static int prize_add(int col)
+{
+    uint32_t src = 0x015784 + 16 * rd16(SPONSOR) + 4 * col;
+    int k, x = 0;
+    if (rd8(COMMAND_FLAGS) & 1)
+        return 0;
+    for (k = 3; k >= 0; k--)
+        wr8(MONEY + k, bcd_addx(rd8(src + k), rd8(MONEY + k), &x));
+    return x;
+}
+
+/*
+ * The command screen's setup, first part ($5AD6, with interrupts
+ * masked): the frame, the result of the race just run (beating the
+ * rival's time by a margin, narrowly, or losing; each pays its prize and
+ * picks the rival's and sponsor's words), the time and the margin, wins
+ * and losses, graphics, and the rival's panel. Returns the rival's words
+ * (a rectangle record), drawn next.
+ */
+static uint32_t command_setup(void)
+{
+    uint32_t rec;
+    int k;
+    screen_reset();
+    objects_clear();
+    vdp_fill(0x40000000, 0, 0x20);
+    vdp_fill(0x60000003, 0xA358, 0x700);
+    vdp_copy_rect(0x64B80003, 0x01403E, 11, 11);
+    for (rec = 0x0156E2, k = 0; k < 4; k++, rec += 12)
+        vdp_copy(rd32(rec), rd32(rec + 8), (uint16_t)rd32(rec + 4) + 1);
+    if (!rd32(RACE_TIME)) {
+        vdp_copy(0x57BA0003, 0x015566, 9);
+    } else {
+        uint32_t margin;
+        if (!(rd8(COMMAND_FLAGS) & 1))
+            wr16(RACES, rd16(RACES) + 1);
+        margin = rd32(RACE_TIME) - rd32(RIVAL_TIME);
+        if (rd32(RACE_TIME) < rd32(RIVAL_TIME)) {
+            wr16(RIVAL_TEXT, 1);
+            wr16(0xFFB612, 3);
+            if (prize_add(0))
+                wr32(MONEY, 0x99999999);
+            if (!(rd8(COMMAND_FLAGS) & 1))
+                wr16(WINS, rd16(WINS) + 1);
+            vdp_copy(0x57BA0003, 0x015758, 9);
+        } else if (margin < 0x1000) {
+            wr16(RIVAL_TEXT, 2);
+            wr16(0xFFB612, 2);
+            prize_add(1);
+        } else {
+            wr16(RIVAL_TEXT, 2);
+            wr16(0xFFB612, 1);
+            prize_add(2);
+        }
+        time_tiles(RIVAL_TIME + 1, 0xFFC83E);
+        vdp_copy(0x56BC0003, 0xFFC83E, 8);
+        if (!rd8(RACE_TIME)) {
+            time_tiles(RACE_TIME + 1, 0xFFC83E);
+            vdp_copy(0x55BC0003, 0xFFC83E, 8);
+        } else {
+            vdp_copy(0x55BE0003, 0x01576A, 6);
+        }
+    }
+    wr32(VDP_CTRL, 0x593C0003);
+    wr16(VDP_DATA, rd16(WINS) + 0xC614);
+    wr32(VDP_CTRL, 0x59480003);
+    wr16(VDP_DATA, rd16(RACES) - rd16(WINS) + 0x8614);
+    vdp_copy_rect(0x60820003, 0x01403E, 11, 11);
+    vdp_copy_rect(0x50860003, 0x014130, 8, 9);
+    wr32(VDP_CTRL, 0x40400000);
+    nemesis_to_vdp(0x04A3B0);
+    wr32(VDP_CTRL, 0x62400001);
+    nemesis_to_vdp(0x04BC00);
+    palette_load(0x014208);
+    vdp_copy(0x509A0003, 0x01428A, 5);
+    vdp_copy_rect(rd32(0x0154FA), 0x0141C0, 6, 6);
+    portrait(0xFFCE40, -0x20, 0xB8, rd16(0x005FF2 + 2 * rd16(RIVAL)));
+    window_columns(0x61260003, 0x12);
+    vdp_copy_rect(0x51A80003, 0x015566, 20, 4);
+    return rd32(mechanic_text_table(0x010AB6, 0x010FA6) + 4 * rd16(RIVAL) + 32 * rd16(RIVAL_TEXT));
+}
+
+void command_setup_68k(void) { cpu.a[6] = command_setup(); }
+
+/*
+ * The second part ($5DB8): the mechanics' row (the hired ones raised),
+ * the names, the sponsor's panel and words, the password after the last
+ * rival's fifth win, the command list and the money.
+ */
+static void command_setup_2(void)
+{
+    int k;
+    vdp_copy(0x56820003, 0x01429E, 8);
+    vdp_copy_rect(rd32(0x0154FE), 0x0141C0, 6, 6);
+    for (k = 6; k >= 0; k--)
+        portrait(0xFFCDC0 - 0x40 * (6 - k), k < rd16(MECHANIC_RANK) ? -0x58 : -0x78, 0x118,
+                 rd16(0x00600E + 2 * k));
+    race_names();
+    vdp_copy(0x5A020003, 0x0142BE, 7);
+    vdp_copy_rect(rd32(0x015502), 0x0141C0, 6, 6);
+    portrait(0xFFCF00, -0x78, 0x150, rd16(0x00601C + 2 * rd16(SPONSOR)));
+    window_columns(0x6A900003, 0x1D);
+    if (rd16(RIVAL) == 6 && rd16(WINS) == 5)
+        password_show();
+    rect_record(rd32(mechanic_text_table(0x0124A0, 0x01325C) + 4 * rd16(SPONSOR) +
+                     32 * rd16(0xFFB612)));
+    vdp_copy_rect(0x64980003, 0x013F86, 16, 5);
+    vdp_copy(0x559C0003, 0x014026, 12);
+    wr32(VDP_CTRL, 0x55A00003);
+    hex_tiles(0xFF0582, rd32(MONEY), 8, 0xE0, 0);
+    hud_eight_tiles();
+    sound_command(0x81);
+}
+
+void command_setup_2_68k(void) { command_setup_2(); }
+
+/* Parts wear after a race ($5F3E): each fitted part loses its rate from
+   $5FE6 (rates count fitted parts only), floor 0. Returns a random word. */
+static uint16_t parts_wear(void)
+{
+    uint32_t rate = 0x005FE6;
+    int k;
+    for (k = 0; k < 6; k++) {
+        int16_t v = (int16_t)rd16(PARTS_WEAR + 2 * k);
+        if (v >= 0) {
+            v = (int16_t)(v - rd16(rate));
+            rate += 2;
+            if (v < 0)
+                v = 0;
+        }
+        wr16(PARTS_WEAR + 2 * k, (uint16_t)v);
+    }
+    return rng_next();
+}
+
+void parts_wear_68k(void)
+{
+    uint32_t seed = rd32(RNG_SEED);
+    uint16_t r;
+    if ((seed & 0xFFFF) == 0)
+        seed = 0x2A6D365B;
+    r = parts_wear();
+    cpu.d[0] = (seed & 0xFFFF0000u) | r;
+    set_dn(1, 2, (uint16_t)(rd16(MECHANIC_RANK) << 2));
+}
+
+/* Then, from the random bits the mechanic's rank lets through ($5F8C):
+   any set, every fitted part gains a point (up to 15), else loses one. */
+static void parts_wear_adjust(uint16_t r)
+{
+    int k;
+    wr16(0xFFB656, r);
+    for (k = 0; k < 6; k++) {
+        uint16_t v = rd16(PARTS_WEAR + 2 * k);
+        if (!(v & 0x8000)) {
+            if (r && v != 0x0F)
+                v++;
+            else if (!r && v)
+                v--;
+        }
+        wr16(PARTS_WEAR + 2 * k, v);
+    }
+    wr8(COMMAND_FLAGS, rd8(COMMAND_FLAGS) & ~2);
+}
+
+void parts_wear_adjust_68k(void) { parts_wear_adjust((uint16_t)cpu.d[0]); }
+
+/* Game mode $24 ($6D16): the setup, or one frame. */
+void mode_command_68k(void)
+{
+    if (mode_first_call()) {
+        rect_record(command_setup());
+        set_sr(get_sr() & 0xF8FF);       /* the rectangle code unmasks */
+        command_setup_2();
+        wr16(SUBMENU, 0);
+        wr16(MECHANIC_CHOICE, rd16(MECHANIC_RANK));
+        wr16(COMMAND_ROW, 0);
+        wr16(0xFFC70E, 0);
+        wr16(0xFFC710, 1);
+        wr16(0xFFC722, 4);
+        wr8(COMMAND_FLAGS, rd8(COMMAND_FLAGS) & ~1);
+        if (rd8(COMMAND_FLAGS) & 2) {
+            uint16_t r = parts_wear();
+            parts_wear_adjust(r & (0xFF00 >> (rd16(MECHANIC_RANK) + 1)) & 0xFF);
+        }
+        wait_vblank();
+        display_on();
+        return;
+    }
+    wait_vblank();
     command_frame();
     set_sr(get_sr() & 0xF8FF);
 }

@@ -178,3 +178,13 @@
 006D06  mode_demo_68k
 0089EE  demo_setup_68k  until=008AA6
 006D0A  mode_race_68k
+006D12  mode_ranking_68k
+00DB14  ranking_setup_68k
+006D16  mode_command_68k
+005AD6  command_setup_68k  until=005DB4
+005DB8  command_setup_2_68k  until=005F0A
+005F3E  parts_wear_68k  until=005F68
+005F8C  parts_wear_adjust_68k  until=005FCA
+006D1A  mode_shop_68k
+0065AA  shop_setup_68k  until=006648
+006652  shop_setup_2_68k  until=006770

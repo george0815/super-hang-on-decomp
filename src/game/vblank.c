@@ -1127,9 +1127,15 @@ void bcd_digits_68k(void)
     cpu.d[4] = (cpu.d[4] & ~0xffu) | b;
 }
 
-void hud_eight_tiles_68k(void)         /* $C1F6 */
+/* Eight tile words from $FF0582 to the VDP ($C1F6). */
+void hud_eight_tiles(void)
 {
     write_words(0xFF0582, 8);
+}
+
+void hud_eight_tiles_68k(void)
+{
+    hud_eight_tiles();
     cpu.d[0] = 0xFFFF;
     f_logic(2, rd16(0xFF0582 + 14));
 }

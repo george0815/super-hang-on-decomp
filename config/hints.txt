@@ -55,3 +55,16 @@ code 00872E RaceSetup
 code 0088CA
 code 0089EE DemoSetup
 code 008AA6
+code 00DB14 RankingSetup
+code 005AD6 CommandSetup
+code 005DB4
+code 005DB8 CommandSetup2
+code 005F0A
+code 005F3E PartsWear
+code 005F68
+code 005F8C PartsWearAdjust
+code 005FCA
+code 0065AA ShopSetup
+code 006648
+code 006652 ShopSetup2
+code 006770

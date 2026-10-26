@@ -281,3 +281,81 @@ void shop_frame_68k(void)
     shop_frame();
     set_sr(get_sr() & 0xF8FF);
 }
+
+/* ------------------------------------------------------------ setup */
+
+/* The parts shop's setup, first part ($65AA, with interrupts masked):
+   the levels shown start as fitted, the bike picture and its six piece
+   objects, the title bar. */
+static void shop_setup(void)
+{
+    int k;
+    screen_reset();
+    objects_clear();
+    wr16(0xFFB614, 0);
+    wr16(PART, 0);
+    wr8(0xFFB655, rd8(0xFFB655) | 1);
+    for (k = 0; k < 6; k++)
+        wr16(PART_LEVELS + 2 * k, rd16(PART_OWNED + 2 * k));
+    wr32(VDP_CTRL, 0x6E000001);
+    nemesis_to_vdp(0x04C008);
+    vdp_copy_rect(0x671A0003, 0x0142DA, 14, 8);
+    for (k = 0; k < 6; k++) {
+        uint32_t obj = 0xFFCE00 + 0x40 * k;
+        wr16(obj, 0x4C);
+        wr16(obj + 4, 0);
+        wr16(obj + 0x14, 0x128);
+        wr16(obj + 0x24, 0);
+    }
+    vdp_copy_rect(0x50940003, 0x015566, 20, 2);
+}
+
+void shop_setup_68k(void) { shop_setup(); }
+
+/* The second part ($664C; verified from $6652, as the VBlank held off
+   by the first part arrives at $664C): the mechanic's portrait and
+   comment, the money, and each part's box (dark when broken), name and
+   label. */
+static void shop_setup_2(void)
+{
+    int16_t part;
+    rect_record(rd32(text_table(0x0157F4, 0x015C24) + 0x54 + 4 * rd16(MECHANIC_BEST)));
+    vdp_copy_rect(0x61060003, 0x0141C0, 6, 6);
+    wr16(0xFFCC40, 0x4C);
+    wr16(0xFFCC40 + 4, 0xFF8C);
+    wr16(0xFFCC40 + 0x14, 0xB8);
+    wr16(0xFFCC40 + 0x24, rd16(0x00600C + (int16_t)(-2 * rd16(MECHANIC_BEST))));
+    vdp_copy_rect(0x51940003, 0x015566, 26, 3);
+    mechanic_comment();
+    vdp_copy_rect(0x6B980003, 0x013F86, 16, 5);
+    vdp_copy(0x5C9C0003, 0x014026, 12);
+    wr32(VDP_CTRL, 0x5CA00003);
+    hex_tiles(0xFF0582, rd32(MONEY), 8, 0xE0, 0);
+    hud_eight_tiles();
+    window_columns(0x61120003, 0x1C);
+    for (part = 5; part >= 0; part--) {
+        part_box_lit(part);
+        if ((int16_t)rd16(PART_WEAR + 2 * part) < 0)
+            part_box_normal(part);
+        part_name(part, rd16(PART_LEVELS + 2 * part));
+        part_label(part, 0);
+    }
+    sound_command(0x8A);
+}
+
+void shop_setup_2_68k(void) { shop_setup_2(); }
+
+/* Game mode $28 ($6D1A): the setup, or one frame. */
+void mode_shop_68k(void)
+{
+    if (mode_first_call()) {
+        shop_setup();
+        unmask();
+        shop_setup_2();
+        mode_setup_done(4);
+        return;
+    }
+    wait_vblank();
+    shop_frame();
+    unmask();
+}

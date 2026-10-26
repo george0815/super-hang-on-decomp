@@ -109,6 +109,7 @@ void hud_draw_all(void);
 void course_graphics(void);
 void bike_graphics(void);
 void dma_slots_run(void);
+void hud_eight_tiles(void);
 
 /* ------------------------------------------------------------- race.c */
 void race_place_objects(void);
@@ -124,6 +125,7 @@ void hud_map_marker(void);
 void hud_numbers(void);
 void menu_countdown(void);
 void push_start_blink(void);
+void window_columns(uint32_t cmd, int steps);
 void music_graphics(void);
 void password_check(uint8_t *hi, uint8_t *lo);
 void hud_curtain(void);
