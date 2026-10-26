@@ -13,6 +13,7 @@
 .segment "ZEROPAGE"
 joy:        .res 2
 pad:        .res 1
+nmi_busy:   .res 1
 
 .segment "CODE"
 
@@ -34,6 +35,11 @@ reset:
     lda #$80
     sta INIDISP             ; forced blank
     stz NMITIMEN
+    ldx #0                  ; work RAM up to the stack, cleared
+:   stz $00, x
+    inx
+    cpx #$1F00
+    bcc :-
     stz HDMAEN
     lda #1
     sta MEMSEL              ; fast ROM
@@ -154,6 +160,9 @@ nmi:
     pha
     plb
     lda RDNMI
+    lda nmi_busy            ; a long upload ran into the next VBlank
+    bne @return
+    inc nmi_busy
 
     lda UPLOAD_READY
     beq @no_uploads
@@ -169,7 +178,10 @@ nmi:
     inc
     xba
     sta f:MIRROR + VBLANK_COUNT
-
+    sep #$20
+    .a8
+    stz nmi_busy
+@return:
     rep #$30
     pld
     plb
@@ -332,7 +344,7 @@ irq:
     .byte $23                   ; SA-1
     .byte $34                   ; ROM, SA-1, RAM
     .byte $0A                   ; 1 MB
-    .byte $07                   ; 128 KB BW-RAM
+    .byte $08                   ; 256 KB BW-RAM
     .byte $01                   ; North America
     .byte $00                   ; developer
     .byte $00                   ; version

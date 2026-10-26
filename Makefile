@@ -106,7 +106,7 @@ SNES_INCS := $(wildcard snes/inc/*.inc) build/snes/gen/assets.inc
 
 snes: build/snes/shangon.sfc
 
-build/snes/gen/assets.s build/snes/gen/assets.inc &: tools/snes/assets.py tools/snes/nemesis.py | check
+build/snes/gen/assets.s build/snes/gen/assets.inc &: tools/snes/assets.py tools/snes/nemesis.py $(GAME) | check
 	$(PYTHON) tools/snes/assets.py $(ROM) build/snes/gen
 
 build/snes/assets.o: build/snes/gen/assets.s

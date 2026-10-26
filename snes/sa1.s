@@ -10,17 +10,15 @@
 .smart
 .include "inc/hw.inc"
 .include "inc/mem.inc"
+.include "inc/dp.inc"
 .include "inc/macros.inc"
 
 .export sa1_reset, wait_vblank, upload_vram, upload_flush
 .export mode_first_call, mode_setup_done
-.import logo_mode
+.import logo_mode, title_mode, vdp_flush, vdp_pending, vdp_reset, display_on
+
 
 ; direct page (SA1_DP + offset)
-up_pos      = $00       ; next free byte in the upload list
-up_src      = $02       ; arguments of upload_vram: source (24 bits),
-up_dst      = $06       ; VRAM word address,
-up_len      = $08       ; length in bytes
 colour      = $0A
 channel     = $0C
 channel2    = $0E
@@ -58,6 +56,7 @@ sa1_reset:
     inx
     bne :-
     stz up_pos
+    stz z:vdp_on
 
 main_loop:
     sep #$20
@@ -82,7 +81,7 @@ unported:
     bra main_loop
 
 modes:
-    .word logo_mode
+    .word logo_mode, title_mode
 modes_end:
 
 ; The first call of a game mode? Z set if so; marks it called (bit 0 of
@@ -101,10 +100,13 @@ mode_first_call:
     rts
 
 ; The end of most modes' setup ($6D70 and on): VBlanks on with handler A,
-; then after the next one the display on.
+; then after the next one the display on. Modes that use the VDP layer
+; also wait for its uploads, so the screen appears complete.
 mode_setup_done:
     stw VBLANK_HANDLER
     jsr wait_vblank
+    lda z:vdp_on
+    bne :+
     sep #$20
     .a8
     lda #$0F
@@ -112,6 +114,11 @@ mode_setup_done:
     rep #$20
     .a16
     rts
+:   jsr vdp_pending
+    beq :+
+    jsr wait_vblank
+    bra :-
+:   jmp display_on
 
 ; Wait for the next VBlank ($6D4E). The frame's uploads go out in it: the
 ; palette if marked, and the list, which the S-CPU's NMI runs before it
@@ -129,7 +136,10 @@ wait_vblank:
     jsr palette_upload
 :   rep #$20
     .a16
-    jsr upload_flush
+    lda z:vdp_on
+    beq :+
+    jsr vdp_flush
+:   jsr upload_flush
     stz a:VBLANK_COUNT
 :   lda a:VBLANK_COUNT
     beq :-
@@ -213,7 +223,15 @@ palette_upload:
     inx
     cpx #128
     bne @colour
-
+    lda z:vdp_on            ; the backdrop: the colour VDP register 7 picks
+    beq :+
+    lda z:VDP_REGS + 7
+    and #$003F
+    asl
+    tax
+    lda f:cgram_buffer, x
+    sta f:cgram_buffer
+:
     lda #.loword(cgram_buffer)
     sta up_src
     lda #^cgram_buffer

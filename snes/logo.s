@@ -11,11 +11,13 @@
 .smart
 .include "inc/hw.inc"
 .include "inc/mem.inc"
+.include "inc/dp.inc"
 .include "inc/macros.inc"
 .include "gen/assets.inc"
 
 .export logo_mode
 .import wait_vblank, upload_vram, mode_first_call, mode_setup_done
+.import vdp_reset, vdp_command, nemesis_to_vdp
 
 LOGO_BITMAP       = $3000
 LOGO_SHOWN        = $4000
@@ -49,9 +51,6 @@ row01       = $34
 row23       = $36
 tile_out    = $38
 rows_left   = $3A
-up_src      = $02       ; (sa1.s's upload arguments)
-up_dst      = $06
-up_len      = $08
 
 .segment "CODE"
 .a16
@@ -553,6 +552,17 @@ logo_tiles:
 ; lower half), palettes 0-1 black with colour 1 white, one walker at the
 ; logo's first pixel, the rest free.
 logo_setup:
+    ; the graphics later screens use (the logo itself is drawn here
+    ; directly; the VDP layer starts with the title screen)
+    jsr vdp_reset
+    lda #$5000
+    ldx #$0000
+    jsr vdp_command
+    lda #$0001
+    ldx #$E84E
+    jsr nemesis_to_vdp
+    stz z:vdp_on
+
     ; the PPU: mode 1, BG1 alone from the logo map; blanked until
     ; mode_setup_done
     sep #$20
