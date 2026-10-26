@@ -13,9 +13,10 @@
 .include "inc/dp.inc"
 .include "inc/macros.inc"
 
-.export sa1_reset, wait_vblank, upload, upload_vram, upload_flush
+.export sa1_reset, wait_vblank, upload, upload_vram, upload_flush, palette_upload
+.export upload_fits
 .export mode_first_call, mode_setup_done
-.import logo_mode, title_mode, vdp_flush, vdp_pending, vdp_reset, display_on
+.import logo_mode, title_mode, course_select_mode, music_select_mode, vdp_flush, vdp_pending, vdp_reset, display_on
 .import sprites_reset
 
 
@@ -83,7 +84,7 @@ unported:
     bra main_loop
 
 modes:
-    .word logo_mode, title_mode
+    .word logo_mode, title_mode, course_select_mode, music_select_mode
 modes_end:
 
 ; The first call of a game mode? Z set if so; marks it called (bit 0 of
@@ -152,6 +153,8 @@ wait_vblank:
     rep #$20
     .a16
     stz up_pos
+    lda #UPLOAD_BUDGET
+    sta z:up_budget
     rts
 
 ; End the upload list and hand it to the next NMI, which clears
@@ -168,10 +171,48 @@ upload_flush:
     .a16
     rts
 
+; The NMI's DMA only reaches VRAM in VBlank while the display is on:
+; about 5.5 KB a frame. The palette and OAM always go; the rest checks.
+UPLOAD_BUDGET = 5400 - 544 - 256
+
+; Is there room for A more bytes this frame? Carry set if so (always while
+; the display is off before or after this VBlank).
+upload_fits:
+    pha
+    sep #$20
+    .a8
+    lda f:SHOWN_INIDISP
+    ora f:SH_INIDISP
+    rep #$20
+    .a16
+    and #$0080
+    bne @yes
+    pla
+    cmp z:up_budget
+    beq :+
+    bcs @no
+:   sec
+    rts
+@yes:
+    pla
+    sec
+    rts
+@no:
+    clc
+    rts
+
 ; Queue a VRAM upload: up_len bytes from up_src to VRAM word up_dst.
 upload_vram:
     lda #UP_VRAM
 upload:
+    pha
+    lda z:up_budget
+    sec
+    sbc up_len
+    bcs :+
+    lda #0
+:   sta z:up_budget
+    pla
     ldx up_pos
     sta f:UPLOADS, x
     lda up_src

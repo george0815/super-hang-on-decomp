@@ -63,6 +63,8 @@ reset:
     lda #$FF
     sta SIWP
     stz UPLOAD_READY
+    lda #$80
+    sta SHOWN_INIDISP
     rep #$20
     lda #.loword(sa1_reset)
     sta CRV
@@ -166,7 +168,11 @@ nmi:
 
     lda UPLOAD_READY
     beq @no_uploads
-    jsr run_uploads
+    lda SH_INIDISP          ; turning the display off: first, so the
+    bpl :+                  ; uploads all reach VRAM
+    sta INIDISP
+    sta SHOWN_INIDISP
+:   jsr run_uploads
     jsr apply_shadows
     stz UPLOAD_READY
 @no_uploads:
@@ -278,6 +284,7 @@ apply_shadows:
     sta BG2VOFS
     lda SH_INIDISP
     sta INIDISP
+    sta SHOWN_INIDISP
     rts
 
 ; The pad as the Genesis's: held buttons S A C B R L D U, and the newly

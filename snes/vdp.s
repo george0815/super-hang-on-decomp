@@ -25,7 +25,7 @@
 .export vdp_reset, vdp_command, vdp_write, vdp_read, vdp_register
 .export vdp_copy, vdp_fill, vdp_copy_rect, vdp_clear, vdp_tiles, vdp_flush
 .export vdp_pending, tile_gen
-.import upload_vram
+.import upload_vram, upload_fits
 
 ROM_VDP_REGISTER_DEFAULTS = $0086A0     ; 19 register-write words
 VDP_MODE_SHADOW = $C700
@@ -263,10 +263,14 @@ vdp_read:
 ; ----------------------------------------------------------- VRAM words
 
 ; Write the word A at VRAM address X: into the copy, marking its tile
-; changed, and into the SNES maps if it is in a name table.
+; changed, and into the SNES maps if it is in a name table. Writing what
+; is there already does nothing (the menus redraw texts every frame).
 vram_word:
     xba
-    sta f:VRAM_MIRROR, x
+    cmp f:VRAM_MIRROR, x
+    bne :+
+    rts
+:   sta f:VRAM_MIRROR, x
     xba
     pha
     phx
@@ -695,6 +699,9 @@ upload_tiles:
     beq @done
     dec z:budget
     bmi @done
+    lda #32
+    jsr upload_fits
+    bcc @done
     lda f:pending, x
     sta z:tile
     inx
@@ -754,7 +761,7 @@ upload_tiles:
     clc
     adc #32
     sta z:stage
-    bra @tile
+    jmp @tile
 @done:
     rts
 
@@ -838,6 +845,10 @@ upload_rows:
     beq @next
     dec z:budget
     bmi @done
+    lda #128
+    jsr upload_fits
+    bcc @done
+    tyx
     sep #$20
     .a8
     lda #0

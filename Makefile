@@ -125,7 +125,7 @@ FRAMES ?= 400
 SHOTS  ?= 100 200 300
 INPUT  ?= tests/inputs/attract.txt
 snes-shots: build/snes/shangon.sfc tools/snes/snesrun
-	tools/snes/snesrun $(SNESCORE) $< $(FRAMES) -i $(INPUT) $(foreach f,$(SHOTS),-s $(f)) -o build/snes/shot -w build/snes/wram.bin -b build/snes/bwram.bin
+	tools/snes/snesrun $(SNESCORE) $< $(FRAMES) -i $(INPUT) $(foreach f,$(SHOTS),-s $(f)) -o build/snes/shot -w build/snes/wram.bin -b build/snes/bwram.bin -v build/snes/vram.bin
 
 # A Genesis screen on the SNES: SNAP is a .vdp snapshot from livetest
 # (build/livetest ROM FRAMES INPUT OUTDIR FRAME); writes SNAPDIR/snap.sfc

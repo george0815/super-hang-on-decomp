@@ -15,6 +15,7 @@
 .export screen_reset, display_on, plane_a_fill, palette_load, palette_words
 .export nemesis_to_vdp, map_unpack, rle_unpack, objects_clear
 .import vdp_command, vdp_register, vdp_write, vdp_fill, vdp_clear, vdp_tiles
+.import sprites_hide
 
 cmd_hi      = $46       ; (vdp.s's arguments)
 cmd_lo      = $6C
@@ -66,6 +67,7 @@ screen_reset:
     inx
     cpx #$140 * 2
     bcc :-
+    jsr sprites_hide
     lda #$140               ; the sprite table
     ldx #$C800
     jsr vdp_clear

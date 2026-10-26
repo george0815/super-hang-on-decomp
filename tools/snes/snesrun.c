@@ -3,14 +3,14 @@
  * (Snes9x), plays an input script, and writes screenshots and RAM dumps.
  *
  * usage: snesrun CORE.so ROM FRAMES [-i SCRIPT] [-s FRAME]... [-o PREFIX]
- *                [-w WRAM.bin] [-b BWRAM.bin]
+ *                [-w WRAM.bin] [-b BWRAM.bin] [-v VRAM.bin]
  *
  * The script has the Genesis tools' format (tests/inputs/NAME.txt): lines of
  * "FIRST LAST BUTTONS" with buttons from UDLRABCS. The Genesis pad maps to
  * the SNES pad as the port does: A = Y, B = B, C = A, S = Start.
  * -s writes PREFIX_FRAME.png after that frame (or each of FIRST-LAST);
- * -w and -b dump work RAM and
- * the cartridge RAM (SA-1 BW-RAM) after the last frame.
+ * -w, -b and -v dump work RAM,
+ * the cartridge RAM (SA-1 BW-RAM) and VRAM after the last frame.
  */
 #include <dlfcn.h>
 #include <stdarg.h>
@@ -197,13 +197,13 @@ int main(int argc, char **argv)
     size_t (*retro_get_memory_size)(unsigned);
     static char shot[1 << 20];
     int frames;
-    const char *prefix = "shot", *wram = NULL, *bwram = NULL;
+    const char *prefix = "shot", *wram = NULL, *bwram = NULL, *vram = NULL;
     struct retro_game_info game = { 0 };
     void *core;
     FILE *f;
 
     if (argc < 4) {
-        fprintf(stderr, "usage: snesrun CORE.so ROM FRAMES [-i SCRIPT] [-s FRAME]... [-o PREFIX] [-w WRAM] [-b BWRAM]\n");
+        fprintf(stderr, "usage: snesrun CORE.so ROM FRAMES [-i SCRIPT] [-s FRAME]... [-o PREFIX] [-w WRAM] [-b BWRAM] [-v VRAM]\n");
         return 1;
     }
     frames = atoi(argv[3]);
@@ -219,6 +219,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[k], "-o")) prefix = argv[k + 1];
         else if (!strcmp(argv[k], "-w")) wram = argv[k + 1];
         else if (!strcmp(argv[k], "-b")) bwram = argv[k + 1];
+        else if (!strcmp(argv[k], "-v")) vram = argv[k + 1];
         else { fprintf(stderr, "unknown option %s\n", argv[k]); return 1; }
     }
 
@@ -258,7 +259,9 @@ int main(int argc, char **argv)
     }
     if (wram)
         dump(wram, retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM), retro_get_memory_size(RETRO_MEMORY_SYSTEM_RAM));
-    if (bwram)
-        dump(bwram, retro_get_memory_data(RETRO_MEMORY_SAVE_RAM), retro_get_memory_size(RETRO_MEMORY_SAVE_RAM));
+    if (bwram)                  /* (the core reports at most 128 KB; its buffer holds the SA-1's 256) */
+        dump(bwram, retro_get_memory_data(RETRO_MEMORY_SAVE_RAM), 0x40000);
+    if (vram)
+        dump(vram, retro_get_memory_data(RETRO_MEMORY_VIDEO_RAM), retro_get_memory_size(RETRO_MEMORY_VIDEO_RAM));
     return 0;
 }

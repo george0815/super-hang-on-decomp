@@ -6,5 +6,6 @@ up_pos      = $00       ; next free byte in the upload list (sa1.s)
 up_src      = $02       ; arguments of upload_vram: source (24 bits),
 up_dst      = $06       ; VRAM word address,
 up_len      = $08       ; length in bytes
+up_budget   = $10       ; bytes the NMI can still upload this frame (sa1.s)
 vdp_on      = $70       ; nonzero once vdp_reset has run: wait_vblank flushes
 VDP_REGS    = $C0       ; the Genesis VDP's registers 0-23 (vdp.s)

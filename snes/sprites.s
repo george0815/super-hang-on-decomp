@@ -24,8 +24,8 @@
 .include "inc/macros.inc"
 .include "gen/assets.inc"
 
-.export sprites_reset, sprites_begin, sprite_object, sprites_end
-.import upload, upload_vram, tile_gen
+.export sprites_reset, sprites_begin, sprite_object, sprites_end, sprites_hide
+.import upload, upload_vram, upload_fits, tile_gen
 
 VRAM_MIRROR = $420000
 PLANAR      = $430000   ; the SNES form of each Genesis tile, 32 bytes
@@ -163,6 +163,11 @@ sprites_begin:
     bcc :-
     pld
     rts
+
+; No OBJs (the sprite table cleared).
+sprites_hide:
+    jsr sprites_begin
+    ; fall through
 
 ; The frame's OBJs: the rest hidden, then the OAM to the upload list.
 sprites_end:
@@ -912,6 +917,9 @@ quad_cell:
 new_block:
     lda z:budget
     beq @none
+    lda #128                ; its tiles must reach VRAM this frame
+    jsr upload_fits_main
+    bcc @none
 @search:
     ldx #0
 :   lda f:block_owner, x
@@ -935,6 +943,15 @@ new_block:
     .a16
     dec z:budget
     clc
+    rts
+
+; upload_fits, on the main direct page.
+upload_fits_main:
+    phd
+    pea SA1_DP
+    pld
+    jsr upload_fits
+    pld
     rts
 
 ; Free the blocks of the entry drawn longest ago (not this frame); carry
