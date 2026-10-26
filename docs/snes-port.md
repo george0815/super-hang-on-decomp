@@ -162,9 +162,9 @@ approximated by samples and the DSP's ADSR.
      (`snes/sprites.s`).
    - Compared with the Genesis 45 frames earlier, its object table,
      sprite table, palette and menu state match byte for byte.
-   - Known: the landed letters need more than 34 OBJ slices on some lines,
-     so the left of the H is lost. Cutting groups with an empty column
-     into 8x8 OBJs may be enough.
+   - Only full 2x2 groups become 16x16 OBJs; the rest are 8x8. That
+     keeps the landed letters within 34 OBJ slices a line, which 16x16
+     OBJs alone did not.
 4. Race renderer: road by HDMA, sprite frames, HUD.
 5. Race logic, compared variable by variable with the recordings.
 6. Menus: course and music select, password, shop, ranking, options.

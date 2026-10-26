@@ -33,7 +33,7 @@ OBJ_TILES   = $6000     ; OBJ VRAM (word address), 512 tiles
 BLOCKS      = 128       ; 16x16 blocks of it
 ENTRIES     = 48        ; cached frames
 MAX_BOXES   = 32
-ENTRY_SIZE  = 10 + MAX_BOXES * 6
+ENTRY_SIZE  = 10 + MAX_BOXES * 8
 GRID        = 16        ; cells a side (128 pixels)
 BLOCK_BUDGET = 24       ; new blocks per frame
 CROP        = 32
@@ -44,7 +44,8 @@ E_TILE0     = 2
 E_SUM       = 4         ; tile_gen sum of its tiles when built
 E_USED      = 6         ; the frame it was last drawn in
 E_BOXES     = 8
-E_BOX       = 10        ; boxes: block, attributes, dx (word), dy (word)
+E_BOX       = 10        ; boxes: block, attributes, dx (word), dy (word),
+                        ; then the quads drawn as 8x8 OBJs (0: one 16x16)
 
 OBJ_TILE_BASE   = $02
 OBJ_SCREEN_X    = $10
@@ -97,6 +98,9 @@ best_age    = $56
 stage_pos   = $58
 row01       = $5A
 row23       = $5C
+qmask       = $66       ; compose: the quads drawn
+big         = $68       ; emit: 16x16 (2) or 8x8 (0)
+quads       = $6A       ; draw_entry: quads left to draw as 8x8
 usrc        = $5E       ; 24 bits: an upload's source,
 udst        = $62       ; VRAM word address,
 ulen        = $64       ; length
@@ -380,7 +384,7 @@ free_entry_blocks:
     .a16
     pla
     clc
-    adc #6
+    adc #8
     tax
     dec z:nbox
     bne @box
@@ -392,7 +396,8 @@ free_entry_blocks:
 
 ; ------------------------------------------------------------- drawing
 
-; An OBJ for each box of the entry, at the object's position.
+; The OBJs of each box of the entry, at the object's position: one
+; 16x16, or an 8x8 per quad drawn.
 draw_entry:
     ldx z:entry
     lda f:entries + E_BOXES, x
@@ -404,35 +409,102 @@ draw_entry:
     adc #E_BOX
     tax
 @box:
-    lda z:oam_n
-    cmp #128
-    bcs @done
-    lda f:entries + 2, x    ; x = object x + dx, on screen
-    clc
-    adc z:x0
-    sec
-    sbc #128 + CROP
-    sta z:oam_x
-    clc
-    adc #16
-    cmp #256 + 16
-    bcs @next
-    lda f:entries + 4, x    ; y
-    clc
-    adc z:y0
-    sec
-    sbc #128
-    sta z:oam_y
-    clc
-    adc #16
-    cmp #224 + 16
-    bcs @next
     phx
     lda f:entries, x        ; block, attributes
     sta z:t0
     and #$00FF
     jsr block_tile
+    sta z:block             ; (its first tile)
+    lda f:entries + 2, x
+    clc
+    adc z:x0
+    sec
+    sbc #128 + CROP
+    sta z:col               ; (the box's x)
+    lda f:entries + 4, x
+    clc
+    adc z:y0
+    sec
+    sbc #128
+    sta z:row               ; (y)
+    lda f:entries + 6, x
+    and #$00FF
+    bne @quads
+    lda #2
+    sta z:big
+    lda z:col
+    sta z:oam_x
+    lda z:row
+    sta z:oam_y
+    lda z:block
     sta z:t1
+    jsr emit
+    bra @next
+@quads:
+    sta z:quads
+    stz z:big
+    stz z:quad
+@quad:
+    lsr z:quads
+    bcc @skip
+    lda z:quad              ; x + 8 (right), y + 8 (bottom)
+    and #1
+    asl
+    asl
+    asl
+    clc
+    adc z:col
+    sta z:oam_x
+    lda z:quad
+    and #2
+    asl
+    asl
+    clc
+    adc z:row
+    sta z:oam_y
+    lda z:quad              ; tile + 1 (right), + 16 (bottom)
+    and #1
+    sta z:t1
+    lda z:quad
+    and #2
+    asl
+    asl
+    asl
+    ora z:t1
+    clc
+    adc z:block
+    sta z:t1
+    jsr emit
+@skip:
+    inc z:quad
+    lda z:quads
+    bne @quad
+@next:
+    pla
+    clc
+    adc #8
+    tax
+    dec z:nbox
+    beq :+
+    jmp @box
+:   rts
+
+; An OBJ at oam_x, oam_y with tile t1 and the attributes in t0's high
+; byte, 16x16 if big; off the screen it is left out.
+emit:
+    lda z:oam_n
+    cmp #128
+    bcs @out
+    lda z:oam_x
+    clc
+    adc #16
+    cmp #256 + 16
+    bcs @out
+    lda z:oam_y
+    clc
+    adc #16
+    cmp #224 + 16
+    bcs @out
     lda z:oam_n
     asl
     asl
@@ -450,21 +522,14 @@ draw_entry:
     sta f:oam + 3, x
     rep #$20
     .a16
-    lda z:oam_x
-    and #$0100
+    lda z:oam_x             ; the high table: x bit 8, size
+    xba
+    and #1
+    ora z:big
     beq :+
-    lda z:oam_n
-    jsr high_bit
+    jsr high_bits
 :   inc z:oam_n
-    plx
-@next:
-    txa
-    clc
-    adc #6
-    tax
-    dec z:nbox
-    bne @box
-@done:
+@out:
     rts
 
 ; Block A's first OBJ tile: (A >> 3) * 32 + (A & 7) * 2.
@@ -480,16 +545,17 @@ block_tile:
     ora z:t1
     rts
 
-; Set the x bit 8 of OBJ A in the high table.
-high_bit:
+; OR the two bits in A into OBJ oam_n's place in the high table.
+high_bits:
     pha
+    lda z:oam_n
     lsr
     lsr
     tax                     ; its byte
-    pla
+    lda z:oam_n
     and #3
     tay
-    lda #1
+    pla
 :   cpy #0
     beq :+
     asl
@@ -922,6 +988,7 @@ compose:
     lda z:stage_pos
     sta z:dst
     stz z:quad
+    stz z:qmask
 @quad:
     jsr quad_cell
     bcs @blank
@@ -940,6 +1007,10 @@ compose:
     sta f:cells_used, x
     rep #$20
     .a16
+    ldx z:quad
+    lda f:quad_bits, x
+    and #$00FF
+    tsb z:qmask
     pla
     jsr stage_tile
     bra @next
@@ -990,6 +1061,8 @@ compose:
     sta z:stage_pos
     rts
 
+quad_bits: .byte 1, 2, 4, 8
+
 ; Add a box for block with the key's attributes at group bx, by; carry set
 ; if the entry is full.
 add_box:
@@ -1000,10 +1073,8 @@ add_box:
     inc
     sta f:entries + E_BOXES, x
     dec
-    sta z:t0                ; offset = entry + E_BOX + 6 * boxes
+    asl                     ; offset = entry + E_BOX + 8 * boxes
     asl
-    clc
-    adc z:t0
     asl
     clc
     adc z:entry
@@ -1044,6 +1115,11 @@ add_box:
     clc
     adc z:min_y
     sta f:entries + 4, x
+    lda z:qmask             ; all four: one 16x16
+    cmp #$0F
+    bne :+
+    lda #0
+:   sta f:entries + 6, x
     clc
     rts
 @full:

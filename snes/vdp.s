@@ -936,7 +936,7 @@ ppu_setup:
     sta f:SH_BG12NBA
     lda #$13
     sta f:SH_TM
-    lda #$60 | 3            ; 16x16 and 32x32 OBJs at $6000
+    lda #$00 | 3            ; 8x8 and 16x16 OBJs at $6000
     sta f:SH_OBSEL
     lda z:VDP_REGS + 18     ; the window from the top over all 28 rows?
     rep #$20
