@@ -3,7 +3,7 @@ SHA1    := ecfd7b3bf4dcbee472ddf2f9cdbe968a05b814e0
 PYTHON  ?= python3
 VASM    ?= tools/bin/vasmm68k_mot
 
-.PHONY: all check disasm report rom recomp fntest replay verify port clean
+.PHONY: all check disasm report rom recomp fntest replay verify sndtest port clean
 
 all: disasm
 
@@ -22,7 +22,7 @@ rom: disasm
 	@cmp build/sho.bin $(ROM) && echo "build/sho.bin: matches $(ROM)"
 
 CC      ?= cc
-RCFLAGS := -O2 -std=c99 -D_DEFAULT_SOURCE -Wall -Wno-unused-label -Wno-unused-variable -Isrc/runtime -Isrc/game -Ibuild/recomp
+RCFLAGS := -O2 -std=c99 -D_DEFAULT_SOURCE -Wall -Wno-unused-label -Wno-unused-variable -Isrc/runtime -Isrc/game -Isrc/sound -Ibuild/recomp
 
 recomp: build/recomp/sho_code.c
 
@@ -45,12 +45,19 @@ fntest: build/fntest
 	build/fntest $(ROM) $(SAMPLES)
 
 GAME    := $(wildcard src/game/*.c)
-RUNTIME := src/runtime/genesis.c src/runtime/vdp.c src/runtime/sound_host.c src/runtime/verify.c src/sound/ym2612.c src/sound/psg.c build/recomp/z80_code.c $(GAME)
-RTHDRS  := src/runtime/m68k_rt.h src/runtime/genesis.h src/runtime/vdp.h src/runtime/z80_rt.h src/runtime/sound.h src/runtime/verify.h src/game/game.h
+RUNTIME := src/runtime/genesis.c src/runtime/vdp.c src/runtime/sound_host.c src/runtime/verify.c src/sound/ym2612.c src/sound/psg.c src/sound/driver.c $(GAME)
+RTHDRS  := src/sound/driver.h src/runtime/m68k_rt.h src/runtime/genesis.h src/runtime/vdp.h src/runtime/z80_rt.h src/runtime/sound.h src/runtime/verify.h src/game/game.h
 
 # the replay keeps the recompiled originals to verify the C against
-build/replay: tests/replay.c $(RUNTIME) $(RTHDRS) src/runtime/entry_recomp.c build/recomp/sho_code_verify.o
-	$(CC) $(RCFLAGS) -o $@ tests/replay.c $(RUNTIME) src/runtime/entry_recomp.c build/recomp/sho_code_verify.o -lz -lm
+build/replay: tests/replay.c $(RUNTIME) $(RTHDRS) src/runtime/entry_recomp.c src/runtime/sound_verify.c build/recomp/sho_code_verify.o build/recomp/z80_code.c
+	$(CC) $(RCFLAGS) -o $@ tests/replay.c $(RUNTIME) src/runtime/entry_recomp.c src/runtime/sound_verify.c build/recomp/sho_code_verify.o build/recomp/z80_code.c -lz -lm
+
+# every sound through the original Z80 driver and the C driver side by side
+build/sndtest: tests/sndtest.c $(RUNTIME) $(RTHDRS) src/runtime/entry_recomp.c src/runtime/sound_verify.c build/recomp/sho_code_verify.o build/recomp/z80_code.c
+	$(CC) $(RCFLAGS) -o $@ tests/sndtest.c $(RUNTIME) src/runtime/entry_recomp.c src/runtime/sound_verify.c build/recomp/sho_code_verify.o build/recomp/z80_code.c -lm
+
+sndtest: build/sndtest
+	build/sndtest $(ROM)
 
 # native port (SDL3)
 SDL_CFLAGS ?= $(shell pkg-config --cflags sdl3)

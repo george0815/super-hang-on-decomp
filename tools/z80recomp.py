@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Static recompiler for the Z80 sound driver -> C (temporary stage).
+"""Static recompiler for the Z80 sound driver -> C (the reference that the
+handwritten driver, src/sound/driver.c, is verified against).
 
 Same scheme as tools/recomp.py: one C function per call target, jumps
 become gotos, calls push the real return address and `ret` pops it into
@@ -280,6 +281,12 @@ def main():
                 # the handler may return into a continuation pushed here
                 code = [code[0].replace(' return;', '')] + [
                     'if (z80.ret == 0x%04X) goto L_%04X;' % (c, c) for c in sorted(conts)] + ['return;']
+            elif flow == 'ret' and conts:
+                # a handler reached by a jump (not through jp (hl)) returns
+                # into the continuation too
+                code = [c.replace('return;', ' '.join(
+                    'if (z80.ret == 0x%04X) goto L_%04X;' % (k, k) for k in sorted(conts)) + ' return;')
+                    for c in code]
             if code:
                 lines.append('    ' + ' '.join(code))
             if flow not in ('jp', 'ret', 'jpind', 'halt'):

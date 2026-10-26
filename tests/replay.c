@@ -92,11 +92,13 @@ static void load_events(const char *path)
     fprintf(stderr, "%zu interrupts, %zu hardware reads\n", nirq, nread);
 }
 
+long sound_verify_failed(void);   /* src/runtime/sound_verify.c */
+
 static void finish(void)
 {
     printf("%ld VBlanks compared, %ld mismatching\n", vcount, mismatches);
     verify_report();
-    exit(mismatches != 0 || verify_failures != 0);
+    exit(mismatches != 0 || verify_failures != 0 || sound_verify_failed() != 0);
 }
 
 static void save_shot(int frame)

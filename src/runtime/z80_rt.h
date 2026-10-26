@@ -1,6 +1,7 @@
 /*
- * Runtime support for the recompiled Z80 sound driver (temporary: replaced
- * by the handwritten sequencer in src/sound once it matches).
+ * The Z80's view of memory, shared by the C sound driver (src/sound) and
+ * the recompiled original it is verified against (build/recomp/z80_code.c,
+ * which also uses the register state and flag helpers below).
  */
 #ifndef Z80_RT_H
 #define Z80_RT_H

@@ -22,11 +22,13 @@ Put it in the repo root. It is gitignored.
 - `src/runtime/m68k_rt.h`: CPU state, memory access, and flag semantics for the generated C
 - `src/runtime/genesis.c`: machine model: memory map, controller, Z80 mailbox, interrupts, video timing
 - `src/runtime/vdp.c`: VDP (video chip): ports, DMA, and a per-scanline renderer
-- `src/runtime/sound_host.c`: runs the recompiled Z80 sound driver (temporary)
+- `src/runtime/sound_host.c`: runs the sound driver at the Z80's times; its view of RAM, chips and bank window
+- `src/sound/driver.c`: the sound driver (the Z80 program), handwritten
 - `src/sound/ym2612.c`, `src/sound/psg.c`: native FM and PSG synthesizers
 - `src/port/main.c`: SDL3 frontend for the native port
 - `src/port/options.c`: options overlay (sound mix), saved between runs
-- `tools/z80.py`, `tools/z80dis.py`, `tools/z80recomp.py`: Z80 decoder, sound driver disassembler, and recompiler
+- `tools/z80.py`, `tools/z80dis.py`, `tools/z80recomp.py`: Z80 decoder, sound driver disassembler, and recompiler (the original driver, for verification)
+- `src/runtime/sound_verify.c`: runs the original driver and the C driver side by side in the replay and `tests/sndtest.c` (every sound, plus fuzzing)
 - `tools/trace/`: reference tools built on a local Genesis Plus GX checkout (not included):
   - `gpgx_trace`: headless run with scripted input; dumps registers and RAM every frame, plus screenshots
   - `gpgx_fncap`: records function entry/exit state and hardware access logs
@@ -70,6 +72,7 @@ Differential testing needs Genesis Plus GX cloned into `genesis-plus-gx/`:
     make fntest    # per-function samples
     make replay    # whole game, compared at every VBlank
     make verify    # replay + every handwritten function checked against its original
+    make sndtest   # every sound through the original and the C sound driver side by side
     build/replay sho.md build/ref/race.events build/ref/race.vtrace --zram build/ref/race.zram
                    # also compares sound driver RAM at every Z80 interrupt
 
@@ -87,8 +90,9 @@ Entry points: entry point `$6BAC`, VBlank `$6D2A`, HBlank `$FF05D2` (RAM copy of
 
 ## Rewriting in readable C
 
-All of the 68000 game code is now handwritten C in `src/game/`; the native
-builds (`build/shangon`, `build/livetest`, CMake) run only that C
+All of the game is now handwritten C: the 68000 code in `src/game/` and the
+Z80 sound driver in `src/sound/driver.c`; the native builds
+(`build/shangon`, `build/livetest`, CMake) run only that C
 (`src/runtime/entry_native.c`). The recompiled code is kept as the
 reference to verify against: each handwritten function is registered in
 `config/handwritten.txt` against its original, with a small `_68k` adapter
@@ -101,3 +105,8 @@ to its first VBlank wait, is checked as a segment (`until=` in
 `config/handwritten.txt`). Code that waits for VBlanks (the waits, the
 fade, the frame loops) cannot be compared this way; the functions it calls
 are.
+
+The sound driver is checked the same way at its entry points: the replay
+(and `make sndtest`, which plays every sound the game uses and fuzzes the
+command set) runs the original Z80 program and the C driver from the same
+state and compares the Z80 RAM and every chip and bank write.

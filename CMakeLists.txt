@@ -6,7 +6,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(SHO_ROM "${CMAKE_SOURCE_DIR}/sho.md" CACHE FILEPATH "Super Hang-On ROM (GM 00004011-00)")
 set(SHO_ROM_SHA1 "ecfd7b3bf4dcbee472ddf2f9cdbe968a05b814e0")
 
-find_package(Python3 REQUIRED COMPONENTS Interpreter)
 find_package(SDL3 CONFIG)
 if(NOT SDL3_FOUND)
     find_package(PkgConfig REQUIRED)
@@ -22,16 +21,8 @@ if(NOT rom_sha1 STREQUAL SHO_ROM_SHA1)
     message(FATAL_ERROR "${SHO_ROM} has SHA-1 ${rom_sha1}, expected ${SHO_ROM_SHA1}")
 endif()
 
-# The Z80 sound driver, generated from the ROM (temporary). The 68000 game
-# code is all handwritten C; its recompiled originals are only used by the
-# Makefile's verification builds.
-set(GEN_DIR "${CMAKE_BINARY_DIR}/gen")
-add_custom_command(
-    OUTPUT "${GEN_DIR}/z80_code.c" "${GEN_DIR}/z80_funcs.h"
-    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/tools/z80recomp.py" "${SHO_ROM}" "${GEN_DIR}"
-    DEPENDS "${CMAKE_SOURCE_DIR}/tools/z80recomp.py" "${CMAKE_SOURCE_DIR}/tools/z80dis.py"
-            "${CMAKE_SOURCE_DIR}/tools/z80.py" "${SHO_ROM}"
-    COMMENT "Generating sound driver code from ROM")
+# All of the game is handwritten C, the Z80 sound driver included; the
+# recompiled originals are only used by the Makefile's verification builds.
 
 file(GLOB GAME_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/game/*.c")
 
@@ -46,8 +37,8 @@ add_executable(shangon
     ${GAME_SOURCES}
     src/sound/ym2612.c
     src/sound/psg.c
-    "${GEN_DIR}/z80_code.c")
-target_include_directories(shangon PRIVATE src/runtime src/game "${GEN_DIR}")
+    src/sound/driver.c)
+target_include_directories(shangon PRIVATE src/runtime src/game src/sound)
 target_link_libraries(shangon PRIVATE SDL3::SDL3)
 if(NOT MSVC)
     target_link_libraries(shangon PRIVATE m)

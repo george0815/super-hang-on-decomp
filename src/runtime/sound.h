@@ -1,6 +1,6 @@
 /*
- * Sound: driver host (temporary, runs the recompiled driver) and the native
- * FM / PSG synthesizers in src/sound.
+ * Sound: the driver host (src/runtime/sound_host.c; the driver itself is
+ * src/sound/driver.c) and the native FM / PSG synthesizers in src/sound.
  */
 #ifndef SOUND_H
 #define SOUND_H
@@ -10,6 +10,13 @@
 #define YM_RATE 53267   /* YM2612 output rate: 7.67 MHz / 144 */
 
 /* driver host */
+enum { SND_IRQ, SND_TICK, SND_REQUESTS, SND_STOP_ALL, SND_FM_RESET, SND_BANK,
+       SND_TIMER_START, SND_TIMER_RESET, SND_ENTRIES };
+void sound_call(int entry);           /* per build: entry_native.c, sound_verify.c */
+extern void (*sound_port_log)(uint16_t addr, uint8_t v);   /* Z80 port writes */
+extern int sound_ports_muted;
+uint16_t sound_bank_get(void);
+void sound_bank_set(uint16_t bank);
 void sound_reset_line(int running);
 void sound_vblank(void);
 void sound_frame(int samples);        /* advance by this many YM samples */

@@ -1,6 +1,8 @@
 /*
- * Drives the recompiled Z80 sound driver (temporary: replaced by the
- * handwritten sequencer in src/sound).
+ * Runs the sound driver (src/sound/driver.c; the verifying replay runs the
+ * original Z80 program next to it, src/runtime/sound_verify.c) and models
+ * the Z80's view of the bus: its RAM, the YM2612, the PSG and the bank
+ * window into 68000 memory.
  *
  * The driver's own main loop busy-waits, so its three phases are run from
  * here instead:
@@ -14,7 +16,6 @@
 
 #include "m68k_rt.h"
 #include "z80_rt.h"
-#include "z80_funcs.h"
 #include "genesis.h"
 #include "sound.h"
 
@@ -25,6 +26,11 @@ static uint16_t bank;      /* 68000 address bits 15-23 for the $8000 window */
 static int timer_b_count;  /* in YM samples */
 
 void (*sound_write_hook)(int chip, int port, uint8_t v);
+void (*sound_port_log)(uint16_t addr, uint8_t v);
+int sound_ports_muted;      /* log the chip writes but leave the chips alone */
+
+uint16_t sound_bank_get(void) { return bank; }
+void sound_bank_set(uint16_t b) { bank = b; }
 int sound_external_ticks;   /* replay: timer ticks come from the recording */
 
 void z80_fault(const char *what, uint16_t addr)
@@ -50,7 +56,17 @@ void z80_write(uint16_t a, uint8_t v)
 {
     if (a < 0x4000) {
         z80_ram[a & 0x1fff] = v;
-    } else if (a < 0x6000) {
+        return;
+    }
+    if (sound_port_log)
+        sound_port_log(a, v);
+    if (a == 0x6000) {
+        bank = (uint16_t)((bank >> 1) | (v & 1) << 8);
+        return;
+    }
+    if (sound_ports_muted)
+        return;
+    if (a < 0x6000) {
         int port = a & 3;
         if (sound_write_hook)
             sound_write_hook(0, port, v);
@@ -58,8 +74,6 @@ void z80_write(uint16_t a, uint8_t v)
             ym_write(ym_addr[port >> 1] | (port & 2) << 7, v);
         else
             ym_addr[port >> 1] = v;
-    } else if (a == 0x6000) {
-        bank = (uint16_t)((bank >> 1) | (v & 1) << 8);
     } else if (a == 0x7f11) {
         if (sound_write_hook)
             sound_write_hook(1, 0, v);
@@ -110,10 +124,9 @@ static void update_mix(void)
     }
 }
 
-static void call(void (*fn)(void))
+static void call(int entry)
 {
-    z_push(0xffff);
-    fn();
+    sound_call(entry);
     update_mix();
 }
 
@@ -136,19 +149,19 @@ void sound_vblank(void)
 {
     switch (phase) {
     case 1:
-        call(z_0038);
+        call(SND_IRQ);
         if (z80_ram[0x1c18] == 0) {
-            call(z_0C37);
-            call(z_1070);
-            call(z_1015);
+            call(SND_STOP_ALL);
+            call(SND_FM_RESET);
+            call(SND_BANK);
             phase = 2;
         }
         break;
     case 2:
-        call(z_11E8);
-        call(z_0038);
+        call(SND_REQUESTS);
+        call(SND_IRQ);
         if (z80_ram[0x1c3c]) {
-            call(z_001F);
+            call(SND_TIMER_START);
             timer_b_count = 0;
             phase = 3;
         }
@@ -160,9 +173,9 @@ void sound_tick(void)
 {
     if (phase != 3)
         return;
-    call(z_11E8);
-    call(z_0027);
-    call(z_0091);
+    call(SND_REQUESTS);
+    call(SND_TIMER_RESET);
+    call(SND_TICK);
 }
 
 /*
@@ -178,17 +191,17 @@ void sound_replay_irq(void)
         if (z80_ram[0x1c18]) {
             z80_ram[0x1c18]--;
             if (z80_ram[0x1c18] == 0) {
-                call(z_0C37);
-                call(z_1070);
-                call(z_1015);
+                call(SND_STOP_ALL);
+                call(SND_FM_RESET);
+                call(SND_BANK);
                 phase = 2;
             }
         }
         break;
     case 2:
-        call(z_11E8);
+        call(SND_REQUESTS);
         if (z80_ram[0x1c3c]) {
-            call(z_001F);
+            call(SND_TIMER_START);
             phase = 3;
         }
         break;
@@ -199,15 +212,15 @@ void sound_replay_timer(void)
 {
     if (phase != 3)
         return;
-    call(z_11E8);
-    call(z_0027);
+    call(SND_REQUESTS);
+    call(SND_TIMER_RESET);
 }
 
 void sound_replay_tick(void)
 {
     if (phase == 2)
-        call(z_11E8);
-    call(z_0091);
+        call(SND_REQUESTS);
+    call(SND_TICK);
 }
 
 void sound_frame(int samples)
