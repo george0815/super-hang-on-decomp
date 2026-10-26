@@ -8,7 +8,8 @@
  * The script has the Genesis tools' format (tests/inputs/NAME.txt): lines of
  * "FIRST LAST BUTTONS" with buttons from UDLRABCS. The Genesis pad maps to
  * the SNES pad as the port does: A = Y, B = B, C = A, S = Start.
- * -s writes PREFIX_FRAME.png after that frame; -w and -b dump work RAM and
+ * -s writes PREFIX_FRAME.png after that frame (or each of FIRST-LAST);
+ * -w and -b dump work RAM and
  * the cartridge RAM (SA-1 BW-RAM) after the last frame.
  */
 #include <dlfcn.h>
@@ -194,8 +195,8 @@ int main(int argc, char **argv)
     bool (*retro_load_game)(const struct retro_game_info *);
     void *(*retro_get_memory_data)(unsigned);
     size_t (*retro_get_memory_size)(unsigned);
-    static int shots[256];
-    int nshots = 0, frames;
+    static char shot[1 << 20];
+    int frames;
     const char *prefix = "shot", *wram = NULL, *bwram = NULL;
     struct retro_game_info game = { 0 };
     void *core;
@@ -208,7 +209,13 @@ int main(int argc, char **argv)
     frames = atoi(argv[3]);
     for (int k = 4; k + 1 < argc; k += 2) {
         if (!strcmp(argv[k], "-i")) load_script(argv[k + 1]);
-        else if (!strcmp(argv[k], "-s") && nshots < 256) shots[nshots++] = atoi(argv[k + 1]);
+        else if (!strcmp(argv[k], "-s")) {
+            int first, last;
+            if (sscanf(argv[k + 1], "%d-%d", &first, &last) != 2)
+                last = first = atoi(argv[k + 1]);
+            for (int n = first; n <= last; n++)
+                if (n >= 0 && n < (int)sizeof shot) shot[n] = 1;
+        }
         else if (!strcmp(argv[k], "-o")) prefix = argv[k + 1];
         else if (!strcmp(argv[k], "-w")) wram = argv[k + 1];
         else if (!strcmp(argv[k], "-b")) bwram = argv[k + 1];
@@ -243,12 +250,11 @@ int main(int argc, char **argv)
 
     for (frame = 0; frame < frames; frame++) {
         retro_run();
-        for (int k = 0; k < nshots; k++)
-            if (shots[k] == frame) {
-                char path[512];
-                snprintf(path, sizeof path, "%s_%d.png", prefix, frame);
-                write_png(path);
-            }
+        if (frame < (int)sizeof shot && shot[frame]) {
+            char path[512];
+            snprintf(path, sizeof path, "%s_%d.png", prefix, frame);
+            write_png(path);
+        }
     }
     if (wram)
         dump(wram, retro_get_memory_data(RETRO_MEMORY_SYSTEM_RAM), retro_get_memory_size(RETRO_MEMORY_SYSTEM_RAM));

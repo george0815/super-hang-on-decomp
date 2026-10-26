@@ -15,7 +15,7 @@
 #include "vdp.h"
 #include "sound.h"
 
-static int frame, frames, nshots, shots[64];
+static int frame, frames, nshots, shots[4096];
 static const char *outdir;
 
 static struct { int first, last; uint16_t pad; } script[1024];
@@ -143,7 +143,7 @@ int main(int argc, char **argv)
     frames = atoi(argv[2]);
     load_script(argv[3]);
     outdir = argv[4];
-    for (i = 5; i < argc && nshots < 64; i++)
+    for (i = 5; i < argc && nshots < 4096; i++)
         shots[nshots++] = atoi(argv[i]);
     f = fopen(argv[1], "rb");
     if (!f) { perror(argv[1]); return 1; }

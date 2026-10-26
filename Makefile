@@ -3,7 +3,7 @@ SHA1    := ecfd7b3bf4dcbee472ddf2f9cdbe968a05b814e0
 PYTHON  ?= python3
 VASM    ?= tools/bin/vasmm68k_mot
 
-.PHONY: all check disasm report rom recomp fntest replay verify sndtest port snes-snap clean
+.PHONY: all check disasm report rom recomp fntest replay verify sndtest port snes snes-shots snes-snap clean
 
 all: disasm
 
@@ -97,14 +97,41 @@ SNESCORE ?= tools/ext/snes9x/libretro/snes9x_libretro.so
 tools/snes/snesrun: tools/snes/snesrun.c
 	$(MAKE) -C tools/snes snesrun
 
+# The SNES port (snes/, docs/snes-port.md): build/snes/shangon.sfc
+SNES_OBJS := $(patsubst snes/%.s,build/snes/%.o,$(wildcard snes/*.s)) build/snes/assets.o
+SNES_INCS := $(wildcard snes/inc/*.inc) build/snes/gen/assets.inc
+
+snes: build/snes/shangon.sfc
+
+build/snes/gen/assets.s build/snes/gen/assets.inc &: tools/snes/assets.py tools/snes/nemesis.py | check
+	$(PYTHON) tools/snes/assets.py $(ROM) build/snes/gen
+
+build/snes/assets.o: build/snes/gen/assets.s
+	$(CA65) --cpu 65816 -I build/snes/gen --bin-include-dir build/snes/gen -o $@ $<
+
+build/snes/%.o: snes/%.s $(SNES_INCS)
+	$(CA65) --cpu 65816 -I snes -I build/snes -o $@ $<
+
+build/snes/shangon.sfc: $(SNES_OBJS) snes/shangon.cfg tools/snes/checksum.py
+	$(LD65) -C snes/shangon.cfg -m build/snes/shangon.map -o $@ $(SNES_OBJS)
+	$(PYTHON) tools/snes/checksum.py $@
+
+# Screenshots of the SNES build: SHOTS frames of a FRAMES-frame run with
+# the INPUT script, to build/snes/shot_N.png
+FRAMES ?= 400
+SHOTS  ?= 100 200 300
+INPUT  ?= tests/inputs/attract.txt
+snes-shots: build/snes/shangon.sfc tools/snes/snesrun
+	tools/snes/snesrun $(SNESCORE) $< $(FRAMES) -i $(INPUT) $(foreach f,$(SHOTS),-s $(f)) -o build/snes/shot -w build/snes/wram.bin -b build/snes/bwram.bin
+
 # A Genesis screen on the SNES: SNAP is a .vdp snapshot from livetest
 # (build/livetest ROM FRAMES INPUT OUTDIR FRAME); writes SNAPDIR/snap.sfc
 # and the SNES's picture of it, SNAPDIR/snes_9.png.
 SNAPDIR ?= $(basename $(SNAP))
 snes-snap: tools/snes/snesrun
 	$(PYTHON) tools/snes/vdp2snes.py $(SNAP) $(SNAPDIR) $(CROP)
-	$(CA65) --cpu 65816 --bin-include-dir $(SNAPDIR) -o $(SNAPDIR)/snap.o snes/snap.s
-	$(LD65) -C snes/snap.cfg -o $(SNAPDIR)/snap.sfc $(SNAPDIR)/snap.o
+	$(CA65) --cpu 65816 --bin-include-dir $(SNAPDIR) -o $(SNAPDIR)/snap.o snes/snap/snap.s
+	$(LD65) -C snes/snap/snap.cfg -o $(SNAPDIR)/snap.sfc $(SNAPDIR)/snap.o
 	$(PYTHON) tools/snes/checksum.py $(SNAPDIR)/snap.sfc
 	tools/snes/snesrun $(SNESCORE) $(SNAPDIR)/snap.sfc 10 -s 9 -o $(SNAPDIR)/snes
 
