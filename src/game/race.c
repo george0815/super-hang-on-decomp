@@ -2585,3 +2585,168 @@ void records_init(void)
 }
 
 void records_init_68k(void) { records_init(); set_dn(1, 2, 0xFFFF); }
+
+/* ------------------------------------------------------------ setup */
+
+/*
+ * The race's setup ($872E, with interrupts masked): road and HUD
+ * graphics, the sky colour for the course, the first stage, the bike
+ * and the rivals placed. Original mode adds the rival bikes' graphics,
+ * its own course table entry and object list, and the frame-broken
+ * warning when a part is worn out.
+ */
+static void race_setup(void)
+{
+    int k, n;
+    uint32_t list;
+    screen_reset();
+    palette_load(0x008E56);
+    nemesis_to_ram(0x0412E0, 0xFF3000);
+    nemesis_to_ram(0x0421E4, 0xFF6400);
+    wr32(VDP_CTRL, 0x4A800003);
+    nemesis_to_vdp(0x01DC80);
+    vdp_copy(0x4F800003, 0x01DD22, 0x41);
+    wr32(VDP_CTRL, 0x5F600001);
+    nemesis_to_vdp(0x040B12);
+    plane_a_fill(0xE6FE);
+    if (rd16(HUD_HIDDEN))
+        wr16(0xFFD3E6, rd16(0x008EC6 + 2 * rd16(0xFFC85A)));
+    else
+        wr16(0xFFD3E6, rd16(0x008EBE + 2 * rd16(0xFF060C)));
+    vdp_fill(0x5FC00003, 0x3333, 16);
+    wr8(0xFFC755, 0xFF);
+    wr32(0xFFC71A, 0x0F);
+    race_init();
+    if (rd16(HUD_HIDDEN)) {
+        uint32_t rec = 0x008E2C + 6 * rd16(0xFFC85A);
+        wr32(VDP_CTRL, 0x7D800002);
+        nemesis_to_vdp(0x04D20E);
+        wr32(0xFFC82E, 0);
+        wr32(0xFFC832, 0);
+        wr16(0xFF060C, rd16(rec));
+        wr16(0xFF060A, rd16(rec + 2));
+        wr16(0xFFC806, rd16(rec + 2));
+        wr16(0xFFC7DC, rd16(rec + 4));
+        rival_splits();
+        list = 0x00954A;
+        n = 0x4F;
+    } else {
+        list = 0x0094C4;
+        n = 0x43;
+    }
+    for (k = 0; k < n; k++)
+        wr16(0xFFB800 + 2 * k, rd16(list + 2 * k));
+    stage_start();
+    stage_graphics_load();
+    stage_geometry();
+    wr32(0xFFC84E, rd32(0xFF0672));
+    wr32(0xFFC852, rd32(0xFF0602));
+    wr32(0xFFC856, rd32(0xFF066E));
+    wr16(0xFF060A, 0);
+    bike_graphics();
+    race_objects_setup();
+    start_objects();
+    objects_update();
+    dma_slots_run();
+    wr16(0xFF06B4, 1);
+    wr16(0xFFC7CA, 0);
+    sound_command(0xB1);
+    if (rd16(HUD_HIDDEN)) {
+        if ((int16_t)rd16(0xFFB648) < 0 || (int16_t)rd16(0xFFB64A) < 0 || (int16_t)rd16(0xFFB652) < 0) {
+            wr16(0xFFC900, 0x50);
+        } else if ((int16_t)rd16(0xFFB650) < 0) {
+            wr16(0xFFB64A, 0xFFFF);
+            wr16(0xFFC900, 0x50);
+        }
+    }
+}
+
+void race_setup_68k(void) { race_setup(); }
+
+/* Interrupts on, then the race VBlank handler from a clean phase ($88CA,
+   $8AA6). */
+static void race_setup_done(void)
+{
+    set_sr(get_sr() & 0xF8FF);
+    wait_vblank();
+    wr16(0xFFC724, 0);
+    wr16(0xFFC722, 8);
+    wr16(VDP_CTRL, 0x8A00);
+    wait_frame_ticks();
+}
+
+/* Game mode $10 ($6D02): the setup and the start music, or one frame of
+   the start sequence. */
+void mode_race_start_68k(void)
+{
+    if (mode_first_call()) {
+        race_setup();
+        race_setup_done();
+        sound_command(0x93);
+        display_on();
+        return;
+    }
+    wait_frame_ticks();
+    race_start_frame();
+}
+
+/*
+ * The demo race's setup ($89EE, with interrupts masked): sound locked,
+ * the demo course and stage from the rotation at $C750/$C752 (each
+ * course shows its stages in turn, the counts in the table at $FA66),
+ * which then moves on for the next demo.
+ */
+static void demo_setup(void)
+{
+    uint16_t course, stage;
+    screen_reset();
+    palette_load(0x008E56);
+    wr32(VDP_CTRL, 0x4A800003);
+    nemesis_to_vdp(0x01DF1C);
+    vdp_copy(0x4F800003, 0x01DFBC, 0x41);
+    wr8(SOUND_LOCKED, 0xFF);
+    wr16(0xFF060C, rd16(0xFFC750));
+    race_init();
+    wr16(0xFFC812, 0x1E);
+    wr16(0xFF060A, rd16(0xFFC752));
+    wr16(0xFFC806, rd16(0xFFC752));
+    stage_start();
+    wr8(0xFF0554, 0x20);
+    stage_graphics_load();
+    hud_draw_all();
+    course_graphics();
+    race_objects_setup();
+    wr16(0xFFC900, 0x18);
+    stage = (uint16_t)(rd16(0xFFC752) + 1);
+    course = rd16(0xFFC750);
+    if ((uint8_t)stage == rd8(0x00FA66 + course)) {
+        wr16(0xFFC750, (course + 1) & 3);
+        stage = 0;
+    }
+    wr16(0xFFC752, stage);
+    hud_numbers();
+    wr16(0xFF064A, 0x50);
+    wr16(VDP_CTRL, 0x9207);
+}
+
+void demo_setup_68k(void) { demo_setup(); }
+
+/* Game mode $14 ($6D06): the demo's setup, or one frame. */
+void mode_demo_68k(void)
+{
+    if (mode_first_call()) {
+        demo_setup();
+        race_setup_done();
+        display_on();
+        return;
+    }
+    wait_frame_ticks();
+    demo_frame();
+}
+
+/* Game mode $18 ($6D0A): one race frame. */
+void mode_race_68k(void)
+{
+    wait_frame_ticks();
+    race_frame();
+}

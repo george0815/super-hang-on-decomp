@@ -935,7 +935,7 @@ static void crash_recover(uint32_t obj)
 #define RIVALS           0xFFCC40
 #define ROM_RIVAL_STARTS 0x00F966   /* 5 x (distance, lane) per course */
 static uint16_t setup_d1;
-static void race_objects_setup(void)
+void race_objects_setup(void)
 {
     uint32_t obj, start;
     int k;

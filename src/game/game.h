@@ -103,6 +103,12 @@ uint16_t char_tile(uint8_t c);
 void screen_reset(void);
 void display_on(void);
 void display_off(void);
+void plane_a_fill(uint16_t entry);
+void stage_graphics_load(void);
+void hud_draw_all(void);
+void course_graphics(void);
+void bike_graphics(void);
+void dma_slots_run(void);
 
 /* ------------------------------------------------------------- race.c */
 void race_place_objects(void);
@@ -129,5 +135,6 @@ void obj_add_to_layer(uint32_t obj);
 void objects_update(void);
 void score_add(void);
 void objects_clear(void);
+void race_objects_setup(void);
 
 #endif

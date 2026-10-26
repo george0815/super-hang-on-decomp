@@ -121,7 +121,7 @@ static void dma_clear(uint32_t command, uint16_t bytes)
 
 /* Fill the plane A name table with one entry, 28 rows of 40 ($8344,
    $833E with entry $E6FE). */
-static void plane_a_fill(uint16_t entry)
+void plane_a_fill(uint16_t entry)
 {
     uint32_t cmd = 0x50000003;
     int row;
@@ -357,7 +357,7 @@ static void vram_clear_steps(void)
 static void dma_copy_regs(uint32_t src);
 void nemesis_to_vdp_68k(void);
 
-static void stage_graphics_load(void)
+void stage_graphics_load(void)
 {
     uint16_t stage = rd16(ANIM_ROW);
     uint32_t rec;
@@ -581,14 +581,13 @@ void menu_countdown(void)
 void menu_countdown_68k(void) { menu_countdown(); }
 
 static void hud_time(void);
-static void hud_draw_all(void);
 
 /*
  * Draw the whole race HUD ($BA9A): its frame pieces, then (unless in the
  * demo) every number, and the course progress bar, as long as the
  * course (or original mode race) has segments.
  */
-static void hud_draw_all(void)
+void hud_draw_all(void)
 {
     uint32_t rec;
     int n, k;
@@ -684,8 +683,17 @@ void hud_draw_all_68k(void)
  * the bike's tiles and the rider frames.
  */
 static void dma_copy_regs(uint32_t src);
+
+/* The bike's tiles and the rider frames ($8C36). */
+void bike_graphics(void)
+{
+    wr32(VDP_CTRL, 0x40000000);
+    nemesis_to_vdp(0x03DF62);
+    nemesis_to_ram(0x040D3E, 0xFFB900);
+}
+
 static uint32_t course_dma_src;   /* last source, for the adapter */
-static void course_graphics(void)
+void course_graphics(void)
 {
     uint32_t list = rd32(0x008ED4 + (uint16_t)(rd16(0xFF060C) * 72 + rd16(0xFF060A) * 8));
     uint16_t words;
@@ -695,9 +703,7 @@ static void course_graphics(void)
         dma_copy(vram_write_command(rd16(list + 2)), course_dma_src, words);
         list += 8;
     }
-    wr32(VDP_CTRL, 0x40000000);
-    nemesis_to_vdp(0x03DF62);
-    nemesis_to_ram(0x040D3E, 0xFFB900);
+    bike_graphics();
 }
 
 void course_graphics_68k(void)
@@ -1079,6 +1085,13 @@ static void dma_slot_68k(uint32_t slot)
     uint32_t src = rd32(slot + 4);
     if (dma_slot(slot))
         dma_copy_regs(src);
+}
+
+/* Both queued transfers, if pending ($F864, $F86A). */
+void dma_slots_run(void)
+{
+    dma_slot(DMA_SLOT_1);
+    dma_slot(DMA_SLOT_2);
 }
 
 void dma_slot_1_68k(void) { dma_slot_68k(DMA_SLOT_1); }

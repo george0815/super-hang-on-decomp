@@ -51,3 +51,7 @@ code 007BD8 CourseSelectSetup
 code 007C4C
 code 007E8E MusicSelectSetup
 code 007EEE
+code 00872E RaceSetup
+code 0088CA
+code 0089EE DemoSetup
+code 008AA6

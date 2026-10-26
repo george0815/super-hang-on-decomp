@@ -569,8 +569,12 @@ class Recompiler:
 
     def outputs(self, flow, f):
         """what verification compares: for a segment, what the code at its
-        end reads"""
-        return flow.inputs[UNTIL[f]] if f in UNTIL else flow.local[f]
+        end reads, less the flags (segments end where interrupts are
+        unmasked, andi #$F8FF,sr: the flags pass through it but are dead)"""
+        from flow import X, N, Z, V, C
+        if f in UNTIL:
+            return flow.inputs[UNTIL[f]] & ~(X | N | Z | V | C)
+        return flow.local[f]
 
     def entries(self):
         return sorted(f for f in self.dis.funcs if f in self.dis.insns)
