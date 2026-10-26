@@ -1,8 +1,9 @@
 ; Memory shared by the two CPUs
 
-; The Genesis's work RAM ($FF0000-$FFFFFF) is mirrored at the same offsets
-; in BW-RAM bank $40, so the port's variables sit where the original's do
-; (words are little-endian here). The SA-1 runs with the data bank at $40.
+; The Genesis's work RAM ($FF0000-$FFFFFF) is mirrored byte for byte in
+; BW-RAM bank $40: the port's variables sit where the original's do, in
+; its byte order (big-endian; see inc/macros.inc), so the SNES's RAM can be
+; compared with the recordings'. The SA-1 runs with the data bank at $40.
 MIRROR = $400000
 
 ; I-RAM ($3000-$37FF, both CPUs; the SA-1 reaches it with long addresses
@@ -39,6 +40,7 @@ UP_OAM       = 3
 ; Genesis RAM the frame loop and VBlank use (offsets in the mirror)
 VBLANK_COUNT = $0500    ; word, counted by every VBlank
 GAME_MODE    = $C704    ; word; bit 0: the mode's setup is done
+VBLANK_HANDLER = $C722  ; word: 0 none, 4 menus, 8 races
 PAD1_HELD    = $C706    ; byte: S A C B R L D U, 1 = down
 PAD1_PRESSED = $C707    ; byte: newly pressed
 PALETTE_DIRTY = $C708   ; byte, bit 0: upload the palette

@@ -10,8 +10,10 @@
 .smart
 .include "inc/hw.inc"
 .include "inc/mem.inc"
+.include "inc/macros.inc"
 
 .export sa1_reset, wait_vblank, upload_vram, upload_flush
+.export mode_first_call, mode_setup_done
 .import logo_mode
 
 ; direct page (SA1_DP + offset)
@@ -65,7 +67,7 @@ main_loop:
     sta a:FRAME_COUNTER_BYTE
     rep #$20
     .a16
-    lda a:GAME_MODE
+    ldw GAME_MODE
     and #$7FFC
     lsr
     tax
@@ -82,6 +84,34 @@ unported:
 modes:
     .word logo_mode
 modes_end:
+
+; The first call of a game mode? Z set if so; marks it called (bit 0 of
+; the mode, src/game/game.h).
+mode_first_call:
+    sep #$20
+    .a8
+    lda a:GAME_MODE + 1
+    bit #1
+    php
+    ora #1
+    sta a:GAME_MODE + 1
+    plp
+    rep #$20
+    .a16
+    rts
+
+; The end of most modes' setup ($6D70 and on): VBlanks on with handler A,
+; then after the next one the display on.
+mode_setup_done:
+    stw VBLANK_HANDLER
+    jsr wait_vblank
+    sep #$20
+    .a8
+    lda #$0F
+    sta f:SH_INIDISP
+    rep #$20
+    .a16
+    rts
 
 ; Wait for the next VBlank ($6D4E). The frame's uploads go out in it: the
 ; palette if marked, and the list, which the S-CPU's NMI runs before it
@@ -151,7 +181,7 @@ upload:
 palette_upload:
     ldx #0
 @colour:
-    lda a:PALETTE_BUFFER, x     ; ----BBB-GGG-RRR-
+    ldw PALETTE_BUFFER, x       ; ----BBB-GGG-RRR-
     sta z:colour
     and #$000E
     jsr level

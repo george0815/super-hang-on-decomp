@@ -11,10 +11,11 @@
 .smart
 .include "inc/hw.inc"
 .include "inc/mem.inc"
+.include "inc/macros.inc"
 .include "gen/assets.inc"
 
 .export logo_mode
-.import wait_vblank, upload_vram, upload_flush
+.import wait_vblank, upload_vram, mode_first_call, mode_setup_done
 
 LOGO_BITMAP       = $3000
 LOGO_SHOWN        = $4000
@@ -27,7 +28,8 @@ LOGO_STEPS        = $C710
 LOGO_PHASE        = $C70E
 LOGO_LEVEL        = $C714
 LOGO_PAUSE        = $C71C
-VBLANK_HANDLER    = $C722
+ROM_FIRST_WALKER  = $008142   ; x, y, offset, direction
+ROM_SWEEP_COLOURS = $00814A   ; 8 steps of 3 colours
 
 ; SNES VRAM (word addresses): the logo's 49 tiles from 0, its map
 LOGO_MAP          = $3800
@@ -57,31 +59,14 @@ up_len      = $08
 
 ; Game mode 0 ($6CF2): the setup, or one frame.
 logo_mode:
-    lda a:GAME_MODE
-    lsr
-    bcs @frame
-    lda a:GAME_MODE
-    ora #1
-    sta a:GAME_MODE
+    jsr mode_first_call
+    bne @frame
     jsr logo_setup
+    lda #4
     jmp mode_setup_done
 @frame:
     jsr wait_vblank
     jmp logo_frame
-
-; The end of a mode's setup ($6D70 and on): VBlanks on, then after the
-; next one the display on.
-mode_setup_done:
-    lda #4
-    sta a:VBLANK_HANDLER
-    jsr wait_vblank
-    sep #$20
-    .a8
-    lda #$0F
-    sta f:SH_INIDISP
-    rep #$20
-    .a16
-    rts
 
 ; ---------------------------------------------------------------- walk
 
@@ -164,7 +149,7 @@ step_up:
 ; the high byte set). A walker with nowhere to go is freed.
 logo_walk:
     stx z:w
-    lda a:6, x
+    ldw 6, x
     clc
     adc #4
     and #$000E
@@ -177,11 +162,11 @@ logo_walk:
     stz z:tries
 @try:
     ldx z:w
-    lda a:0, x
+    ldw 0, x
     sta z:px
-    lda a:2, x
+    ldw 2, x
     sta z:py
-    lda a:4, x
+    ldw 4, x
     sta z:poff
     lda z:tries
     beq @step
@@ -238,35 +223,38 @@ logo_walk:
     .a16
     ldx z:w
     lda z:dir
-    sta a:6, x
+    stw 6, x
     lda z:px
-    sta a:LOGO_FOUND
+    stw LOGO_FOUND
     lda z:py
-    sta a:LOGO_FOUND + 2
+    stw LOGO_FOUND + 2
     lda z:poff
-    sta a:LOGO_FOUND + 4
+    stw LOGO_FOUND + 4
     bra @next
 @spawn:
     rep #$20
     .a16
-    inc a:LOGO_WALKER_COUNT
+    ldw LOGO_WALKER_COUNT
+    inc
+    stw LOGO_WALKER_COUNT
     ldx #LOGO_WALKERS
-:   lda a:0, x
-    bmi :+
+:   lda a:0, x              ; the first free one (x negative)
+    and #$0080
+    bne :+
     txa
     clc
     adc #8
     tax
     bra :-
 :   lda z:px
-    sta a:0, x
+    stw 0, x
     lda z:py
     ora #$FF00
-    sta a:2, x
+    stw 2, x
     lda z:poff
-    sta a:4, x
+    stw 4, x
     lda z:dir
-    sta a:6, x
+    stw 6, x
 @next:
     rep #$20
     .a16
@@ -294,7 +282,9 @@ logo_walk:
 @free:
     rep #$20
     .a16
-    dec a:LOGO_WALKER_COUNT
+    ldw LOGO_WALKER_COUNT
+    dec
+    stw LOGO_WALKER_COUNT
     lda #$FFFF
     sta a:0, x
     rts
@@ -304,7 +294,7 @@ logo_walk:
 logo_next_mode:
     stz a:VBLANK_HANDLER
     lda #4                  ; the title screen
-    sta a:GAME_MODE
+    stw GAME_MODE
     rts
 
 ; One logo frame after the VBlank ($724E). C/Start skips to the title.
@@ -330,15 +320,18 @@ logo_frame:
     beq @traced
     ldx #LOGO_WALKERS
 @walker:
-    lda a:0, x
-    bmi @skip
+    lda a:0, x              ; free: x negative
+    and #$0080
+    bne @skip
     lda a:2, x
-    bpl @walk
-    and #$00FF              ; waited its turn: y back to its low byte
+    and #$0080
+    beq @walk
+    lda a:3, x              ; waited its turn: y back to its low byte
+    and #$00FF
     cmp #$80
     bcc :+
     ora #$FF00
-:   sta a:2, x
+:   stw 2, x
     bra @skip
 @walk:
     phx
@@ -359,8 +352,10 @@ logo_frame:
     jsr logo_tiles
     lda a:LOGO_PAUSE
     beq @brighten
+    ldw LOGO_PAUSE
     dec
-    sta a:LOGO_PAUSE
+    stw LOGO_PAUSE
+    cmp #0
     bne :+
     jmp logo_next_mode
 :   rts
@@ -368,10 +363,11 @@ logo_frame:
 @brighten:
     lda a:LOGO_PHASE
     bne @sweep
-    lda a:LOGO_LEVEL
+    ldw LOGO_LEVEL
     clc
     adc #$111
-    sta a:LOGO_LEVEL
+    stw LOGO_LEVEL
+    xba
     ldx #0
 :   sta a:PALETTE_BUFFER + $24, x
     sta a:PALETTE_BUFFER + $04, x
@@ -379,17 +375,20 @@ logo_frame:
     inx
     cpx #14 * 2
     bcc :-
-    lda a:LOGO_STEPS
+    ldw LOGO_STEPS
     dec
-    sta a:LOGO_STEPS
-    bpl :+
-    inc a:LOGO_PHASE
+    stw LOGO_STEPS
+    cmp #$8000
+    bcc :+
+    ldw LOGO_PHASE
+    inc
+    stw LOGO_PHASE
     lda #7
-    sta a:LOGO_SWEEP
+    stw LOGO_SWEEP
     lda #$0A
-    sta a:LOGO_SWEEP + 2
+    stw LOGO_SWEEP + 2
     lda #$0D
-    sta a:LOGO_STEPS
+    stw LOGO_STEPS
 :   rts
 
 @sweep:
@@ -401,22 +400,22 @@ logo_frame:
     .a16
     bcs :+
     rts
-:   lda a:LOGO_STEPS
+:   ldw LOGO_STEPS
     cmp #6
     bcc :+
-    lda a:PALETTE_BUFFER + $04
+    ldw PALETTE_BUFFER + $04
     sec
     sbc #$111
-    sta a:PALETTE_BUFFER + $04
-    lda a:PALETTE_BUFFER + $24
+    stw PALETTE_BUFFER + $04
+    ldw PALETTE_BUFFER + $24
     sec
     sbc #$111
-    sta a:PALETTE_BUFFER + $24
+    stw PALETTE_BUFFER + $24
 :   ldy #0                  ; band * 2
 @band:
-    lda a:LOGO_SWEEP, y
+    ldw LOGO_SWEEP, y
     dec
-    sta a:LOGO_SWEEP, y
+    stw LOGO_SWEEP, y
     sta z:px                ; (i)
     tya
     asl
@@ -436,12 +435,12 @@ logo_frame:
     asl                     ; 6 * i
     adc z:px
     asl
-    tax
-    lda f:logo_sweep_colours, x
+    tax                     ; (big-endian colours, copied as they are)
+    lda f:MDROM + ROM_SWEEP_COLOURS, x
     sta z:mask
-    lda f:logo_sweep_colours + 2, x
+    lda f:MDROM + ROM_SWEEP_COLOURS + 2, x
     sta z:bit_
-    lda f:logo_sweep_colours + 4, x
+    lda f:MDROM + ROM_SWEEP_COLOURS + 4, x
     ldx z:poff
     sta a:4, x
     lda z:bit_
@@ -459,12 +458,13 @@ logo_frame:
     iny
     cpy #4
     bcc @band
-    lda a:LOGO_STEPS
+    ldw LOGO_STEPS
     dec
-    sta a:LOGO_STEPS
-    bpl :+
+    stw LOGO_STEPS
+    cmp #$8000
+    bcc :+
     lda #$3C
-    sta a:LOGO_PAUSE
+    stw LOGO_PAUSE
 :   rts
 
 ; Upload the 49 logo tiles at X (LOGO_SHOWN or LOGO_BITMAP) to VRAM 0
@@ -633,8 +633,8 @@ logo_setup:
     cpx #$40
     bcc :-
     lda #$0EEE
-    sta a:PALETTE_BUFFER + 2
-    sta a:PALETTE_BUFFER + $22
+    stw PALETTE_BUFFER + 2
+    stw PALETTE_BUFFER + $22
     sep #$20
     .a8
     lda a:PALETTE_DIRTY
@@ -644,9 +644,9 @@ logo_setup:
     .a16
 
     lda #1
-    sta a:LOGO_WALKER_COUNT
+    stw LOGO_WALKER_COUNT
     ldx #0
-:   lda f:logo_first_walker, x
+:   lda f:MDROM + ROM_FIRST_WALKER, x
     sta a:LOGO_WALKERS, x
     inx
     inx
@@ -663,7 +663,7 @@ logo_setup:
     bcc :-
     stz a:LOGO_PHASE
     lda #$0D
-    sta a:LOGO_STEPS
+    stw LOGO_STEPS
     stz a:LOGO_LEVEL
     stz a:LOGO_PAUSE
     rts

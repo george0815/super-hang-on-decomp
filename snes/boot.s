@@ -164,8 +164,10 @@ nmi:
     jsr read_pad
     rep #$20
     .a16
-    lda f:MIRROR + VBLANK_COUNT
+    lda f:MIRROR + VBLANK_COUNT ; (big-endian)
+    xba
     inc
+    xba
     sta f:MIRROR + VBLANK_COUNT
 
     rep #$30
@@ -329,7 +331,7 @@ irq:
     .byte "SUPER HANG-ON SNES   "   ; 21 bytes
     .byte $23                   ; SA-1
     .byte $34                   ; ROM, SA-1, RAM
-    .byte $09                   ; 512 KB
+    .byte $0A                   ; 1 MB
     .byte $07                   ; 128 KB BW-RAM
     .byte $01                   ; North America
     .byte $00                   ; developer

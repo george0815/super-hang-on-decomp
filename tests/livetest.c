@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "m68k_rt.h"
 #include "genesis.h"
 #include "vdp.h"
 #include "sound.h"
@@ -123,6 +124,12 @@ void host_frame(const uint8_t *pixels)
         fwrite(vdp.vsram, 2, 64, f);
         fwrite(vdp.reg, 1, sizeof vdp.reg, f);
         fwrite(vdp.line_vsram, 2, VDP_LINES * 2, f);
+        fclose(f);
+        /* and the work RAM */
+        snprintf(path, sizeof path, "%s/live_%05d.ram", outdir, frame);
+        f = fopen(path, "wb");
+        if (!f) { perror(path); continue; }
+        fwrite(m68k_ram, 1, sizeof m68k_ram, f);
         fclose(f);
     }
     if (++frame >= frames)
