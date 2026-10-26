@@ -134,7 +134,6 @@ void wait_frame_ticks_68k(void) { wait_frame_ticks(); }
 
 /* --------------------------------------------------------------- reset */
 
-#include "sho_funcs.h"
 
 #define RAM_SIGNATURE    0xFF0000   /* "init" once RAM has been set up */
 
@@ -166,6 +165,13 @@ static int rom_checksum_ok(void)
     return sum == rd16(0x00018E);
 }
 
+/* The game mode table ($6CF2) */
+static void (*const modes[])(void) = {
+    mode_logo, mode_title, mode_course_select, mode_music_select,
+    mode_race_start, mode_demo, mode_race, mode_goal, mode_ranking,
+    mode_command, mode_shop, mode_password, mode_options, mode_ranking_insert,
+};
+
 /*
  * Power on and reset ($6BAC): TMSS, region flags; on a cold start the ROM
  * checksum (a red screen if it fails), all RAM cleared and the ranking
@@ -186,7 +192,7 @@ void reset(void)
         if ((int16_t)rd16(0xFFC722) > 8)
             wr16(0xFFC722, 0);
         set_sr(get_sr() & 0xF8FF);
-        call68k(f_006DD4);                /* fade out */
+        fade_out();                /* fade out */
         set_sr(get_sr() | 0x700);
     } else {
         uint16_t lang;
@@ -220,9 +226,9 @@ void reset(void)
         uint16_t mode;
         wr8(0xFFC726, rd8(0xFFC726) + 1);
         mode = rd16(0xFFC704) & 0x7FFC;
-        set_dn(0, 2, mode);
-        push32(0x006CF0);
-        m68k_dispatch(0x006CF2 + mode);
+        if (mode / 4 >= (int)(sizeof modes / sizeof modes[0]))
+            m68k_fault("unknown game mode", mode);
+        modes[mode / 4]();
     }
 }
 

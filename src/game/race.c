@@ -3,7 +3,6 @@
 #include <string.h>
 
 #include "game.h"
-#include "sho_funcs.h"
 
 #define GAME_MODE        0xFFC704
 #define MODE_RACE        0x14
@@ -2485,7 +2484,7 @@ static void demo_frame_end(void)
         return;
     }
     if (rd8(0xFFC707) & 0xA0) {
-        call68k(f_006DD4);
+        fade_out();
         wr16(0xFFC722, 0);
         wr16(GAME_MODE, 0);
     }
@@ -2513,7 +2512,7 @@ static void race_frame(void)
     if (next) {
         wr16(GAME_MODE, next);
         if (next == 0x24) {
-            call68k(f_006DD4);
+            fade_out();
             wr16(0xFFC722, 0);
         }
         return;
@@ -2677,7 +2676,7 @@ static void race_setup_done(void)
 
 /* Game mode $10 ($6D02): the setup and the start music, or one frame of
    the start sequence. */
-void mode_race_start_68k(void)
+void mode_race_start(void)
 {
     if (mode_first_call()) {
         race_setup();
@@ -2732,7 +2731,7 @@ static void demo_setup(void)
 void demo_setup_68k(void) { demo_setup(); }
 
 /* Game mode $14 ($6D06): the demo's setup, or one frame. */
-void mode_demo_68k(void)
+void mode_demo(void)
 {
     if (mode_first_call()) {
         demo_setup();
@@ -2745,7 +2744,7 @@ void mode_demo_68k(void)
 }
 
 /* Game mode $18 ($6D0A): one race frame. */
-void mode_race_68k(void)
+void mode_race(void)
 {
     wait_frame_ticks();
     race_frame();
@@ -2867,7 +2866,7 @@ static void goal_frame(void)
 void goal_frame_68k(void) { goal_frame(); }
 
 /* Game mode $1C ($6D0E): the setup, or one frame past the goal. */
-void mode_goal_68k(void)
+void mode_goal(void)
 {
     if (mode_first_call()) {
         goal_setup();

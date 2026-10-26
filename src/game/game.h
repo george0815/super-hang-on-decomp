@@ -14,14 +14,6 @@
 
 #include "m68k_rt.h"
 
-/* Call a recompiled function that has no C version yet (it returns with
-   rts, popping the dummy return address). */
-static inline void call68k(void (*fn)(void))
-{
-    push32(0);
-    fn();
-}
-
 /* A game mode's first call ($C705 bit 0 clear): sets the bit, so the
    mode's setup runs once. */
 static inline int mode_first_call(void)
@@ -34,6 +26,22 @@ static inline int mode_first_call(void)
 /* The end of most game modes' setup: interrupts on with the given VBlank
    handler, then after the next VBlank the display on. */
 void mode_setup_done(uint16_t vblank_handler);
+
+/* The game modes ($6CF2 on, by mode / 4) */
+void mode_logo(void);
+void mode_title(void);
+void mode_course_select(void);
+void mode_music_select(void);
+void mode_race_start(void);
+void mode_demo(void);
+void mode_race(void);
+void mode_goal(void);
+void mode_ranking(void);
+void mode_command(void);
+void mode_shop(void);
+void mode_password(void);
+void mode_options(void);
+void mode_ranking_insert(void);
 
 /* ------------------------------------------------------- work RAM map */
 

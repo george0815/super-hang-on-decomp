@@ -253,7 +253,7 @@ static void logo_setup(void)
 void logo_setup_68k(void) { logo_setup(); }
 
 /* Game mode 0 ($6CF2): the setup, or one frame. */
-void mode_logo_68k(void)
+void mode_logo(void)
 {
     if (mode_first_call()) {
         logo_setup();

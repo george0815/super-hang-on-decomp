@@ -183,7 +183,6 @@ void mechanic_menu_68k(void)
 
 /* --------------------------------------------------------------- end */
 
-#include "sho_funcs.h"
 
 #define PASSWORD         0xFFB658   /* 28 character codes */
 
@@ -271,7 +270,7 @@ static void end_menu(void)
         return;
     }
     if (rd8(PAD1_PRESSED) & 0xA0) {
-        call68k(f_006DD4);           /* fade out (waits for VBlanks) */
+        fade_out();           /* fade out (waits for VBlanks) */
         wr16(0xFFC722, 0);
         wr16(0xFFC704, 0);
         return;
@@ -356,7 +355,7 @@ static void rival_next(void)
 {
     rect(0x54B80003, 0x015566, 11, 11);
     if (rd16(RIVAL) == 6) {
-        call68k(f_006DD4);           /* fade out (waits for VBlanks) */
+        fade_out();           /* fade out (waits for VBlanks) */
         wr16(0xFFC722, 0);
         wr16(0xFFC704, 0);
         return;
@@ -733,7 +732,7 @@ static void parts_wear_adjust(uint16_t r)
 void parts_wear_adjust_68k(void) { parts_wear_adjust((uint16_t)cpu.d[0]); }
 
 /* Game mode $24 ($6D16): the setup, or one frame. */
-void mode_command_68k(void)
+void mode_command(void)
 {
     if (mode_first_call()) {
         rect_record(command_setup());

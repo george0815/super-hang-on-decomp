@@ -1,7 +1,6 @@
 /* The music select screen (game mode $C). */
 
 #include "game.h"
-#include "sho_funcs.h"
 
 #define PAD1_PRESSED     0xFFC707
 #define MUSIC_CHOICE     0xFF0516   /* 0-3 */
@@ -18,7 +17,7 @@ static void music_select_input(void)
     int d;
     if (p & 0xA0) {
         sound_command(0xB0);
-        call68k(f_006DD4);           /* fade out (waits for VBlanks) */
+        fade_out();           /* fade out (waits for VBlanks) */
         wr16(0xFFC722, 0);
         wr16(0xFFC704, 0x10);
         return;
@@ -135,7 +134,7 @@ static void music_select_frame(void)
     menu_countdown();
     if (rd8(0xFFC718)) {
         sound_command(0xB0);
-        call68k(f_006DD4);
+        fade_out();
         wr16(0xFFC722, 0);
         wr16(0xFFC704, 0x10);
         return;
@@ -176,7 +175,7 @@ static void music_select_setup(void)
 void music_select_setup_68k(void) { music_select_setup(); }
 
 /* Game mode $0C ($6CFE): the setup, or one frame. */
-void mode_music_select_68k(void)
+void mode_music_select(void)
 {
     if (mode_first_call()) {
         music_select_setup();

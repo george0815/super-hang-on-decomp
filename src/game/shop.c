@@ -346,7 +346,7 @@ static void shop_setup_2(void)
 void shop_setup_2_68k(void) { shop_setup_2(); }
 
 /* Game mode $28 ($6D1A): the setup, or one frame. */
-void mode_shop_68k(void)
+void mode_shop(void)
 {
     if (mode_first_call()) {
         shop_setup();

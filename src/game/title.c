@@ -385,7 +385,7 @@ static void title_setup(void)
 void title_setup_68k(void) { title_setup(); }
 
 /* Game mode 4 ($6CF6): the setup, or one frame. */
-void mode_title_68k(void)
+void mode_title(void)
 {
     if (mode_first_call()) {
         title_setup();
@@ -427,7 +427,7 @@ static void course_select_setup(void)
 void course_select_setup_68k(void) { course_select_setup(); }
 
 /* Game mode 8 ($6CFA): the setup, or one frame. */
-void mode_course_select_68k(void)
+void mode_course_select(void)
 {
     if (mode_first_call()) {
         course_select_setup();

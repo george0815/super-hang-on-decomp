@@ -1998,7 +1998,7 @@ static void obj_goal_loop(uint32_t obj)
     obj_add_to_layer(obj);
 }
 
-/* Handlers by index; NULL ones still run recompiled. */
+/* Handlers by index ($710A on). */
 static void (*const handlers[25])(uint32_t obj) = {
     [(0x710A - 0x710A) / 4] = obj_debris,
     [(0x710E - 0x710A) / 4] = obj_player_bike,
@@ -2106,24 +2106,11 @@ void objects_update(void)
 
     for (k = 0; k < OBJ_COUNT; k++, obj += OBJ_SIZE) {
         uint16_t index = rd16(obj + OBJ_HANDLER) & 0xFFFE;
-        void (*h)(uint32_t);
         if (!index)
             continue;
-        h = handlers[index / 4 - 1];
-        if (h) {
-            h(obj);
-        } else {
-            /* recompiled handler: registers as the original loop sets them */
-            uint16_t counter = (uint16_t)(OBJ_COUNT - 1 - k);
-            set_dn(7, 2, counter);
-            push16(counter);
-            cpu.a[0] = 0xFF000000u | obj;   /* as lea ($FFFFC900).w sign-extends it */
-            set_dn(0, 2, index);
-            cpu.a[1] = 0x7106;
-            push32(0x71A0);
-            m68k_dispatch(0x7106 + index);
-            pop16();
-        }
+        if (index < 4 || index / 4 > (int)(sizeof handlers / sizeof handlers[0]))
+            m68k_fault("unknown object handler", index);
+        handlers[index / 4 - 1](obj);
     }
     objects_sprite_count = build_sprite_table();
     link_sprites(objects_sprite_count);

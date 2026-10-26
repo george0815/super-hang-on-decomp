@@ -2,7 +2,6 @@
    test. */
 
 #include "game.h"
-#include "sho_funcs.h"
 
 #define PAD1_PRESSED     0xFFC707
 #define OPTION_ROW       0xFFC70E   /* 0-3 */
@@ -50,7 +49,7 @@ static void options_frame(void)
         }
         if (p & 0x70) {
             sound_command(0xB1);
-            call68k(f_006D4E);           /* one frame for the stop to land */
+            wait_vblank();           /* one frame for the stop to land */
             sound_command(rd8(0x006B92 + rd16(SOUND_TEST)));
         }
     } else if (row == 2) {
@@ -75,7 +74,7 @@ static void options_frame(void)
     vdp_copy(0x59200003, rd32(0x006AC6 + (rd16(LANGUAGE) ? 4 : 0)), 8);
     if (p & 0x80) {
         sound_command(0xB1);
-        call68k(f_006DD4);
+        fade_out();
         wr16(0xFFC722, 0);
         wr16(0xFFC704, 0);
     }
@@ -97,7 +96,7 @@ static void options_setup(void)
 void options_setup_68k(void) { options_setup(); }
 
 /* Game mode $30 ($6D22): the setup, or one frame. */
-void mode_options_68k(void)
+void mode_options(void)
 {
     if (mode_first_call()) {
         options_setup();

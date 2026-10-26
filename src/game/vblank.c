@@ -7,7 +7,6 @@
  * over the three VBlanks that each 20 fps race frame lasts.
  */
 #include "game.h"
-#include "sho_funcs.h"
 
 /* ------------------------------------------------------------ RAM map */
 
@@ -1034,10 +1033,7 @@ static void vblank_entry(void)
     case 0: break;
     case 4: vblank_menu(); break;
     case 8: vblank_race(); break;
-    default:
-        push32(0);
-        m68k_dispatch(0x006D42 + rd16(0xFFC722));
-        break;
+    default: m68k_fault("unknown VBlank handler", rd16(0xFFC722));
     }
     wr16(0xFF0500, rd16(0xFF0500) + 1);
     for (n = 0; n < 15; n++, sp += 4) {    /* movem.l (sp)+,d0-d7/a0-a6 */

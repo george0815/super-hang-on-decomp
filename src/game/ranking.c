@@ -105,7 +105,6 @@ void ranking_defaults_68k(void)
 
 /* ------------------------------------------------------------ frame */
 
-#include "sho_funcs.h"
 
 #define PAD1_HELD        0xFFC706
 #define PAD1_PRESSED     0xFFC707
@@ -119,7 +118,7 @@ void ranking_defaults_68k(void)
 
 static void ranking_end(void)
 {
-    call68k(f_006DD4);               /* fade out (waits for VBlanks) */
+    fade_out();               /* fade out (waits for VBlanks) */
     wr16(0xFFC722, 0);
     wr16(0xFFC704, 0);
 }
@@ -286,7 +285,7 @@ static void ranking_setup(void)
 void ranking_setup_68k(void) { ranking_setup(); }
 
 /* Game mode $20 ($6D12): the setup, or one frame. */
-void mode_ranking_68k(void)
+void mode_ranking(void)
 {
     if (mode_first_call()) {
         ranking_setup();
@@ -353,7 +352,7 @@ void ranking_insert_68k(void) { ranking_insert(); }
 
 /* Game mode $34 ($6D26): the ranking insertion, then (while it is still
    the mode) frames go by. */
-void mode_ranking_insert_68k(void)
+void mode_ranking_insert(void)
 {
     if (mode_first_call()) {
         ranking_insert();

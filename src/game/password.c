@@ -371,7 +371,7 @@ static void pw_setup_2(void)
 void pw_setup_2_68k(void) { pw_setup_2(); }
 
 /* Game mode $2C ($6D1E): the setup, or one frame. */
-void mode_password_68k(void)
+void mode_password(void)
 {
     if (mode_first_call()) {
         pw_setup();
