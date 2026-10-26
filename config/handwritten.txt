@@ -197,3 +197,8 @@
 006A3E  options_setup_68k  until=006A6C
 006D26  mode_ranking_insert_68k  ignore=d1,d4,d5
 00E1A4  ranking_insert_68k
+006D0E  mode_goal_68k  ignore=d1,d4,d5
+00B95C  goal_setup_68k
+00B874  goal_frame_68k
+00B974  goal_bonus_tick_68k
+00B984  goal_bonus_show_68k

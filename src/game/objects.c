@@ -1761,6 +1761,243 @@ static void obj_retire(uint32_t obj)
     wr16(0xFFC720, 0x24);
 }
 
+/* ------------------------------------------------------------- goal */
+
+#define GOAL_STARTED     0x18    /* word: the goal line has been reached */
+
+/*
+ * The goal line ($715A): it comes up as the stage's last stretch runs
+ * out ($FF06BC counts down). Once passed, arcade mode loads the
+ * ceremony's graphics and palette, clears the rivals and rolls the bike
+ * in at a fixed speed until the line is near, when the ceremony starts
+ * (handler $58). Original mode just marks the goal ($FF06C0).
+ */
+static void obj_goal_line(uint32_t obj)
+{
+    if (!(rd8(obj + OBJ_FLAGS) & 1)) {
+        wr8(obj + OBJ_FLAGS, rd8(obj + OBJ_FLAGS) | 1);
+        wr16(obj + GOAL_STARTED, 0);
+        wr16(obj + OBJ_SCREEN_X, 0x120);
+        wr8(obj + OBJ_SPRITE_SET, 0x0A);
+    }
+    if (rd16(obj + GOAL_STARTED)) {
+        if (rd16(0xFFC7CC)) {
+            obj_add_to_layer(obj);
+            return;
+        }
+        if (!rd16(0xFFCE80)) {
+            wr16(0xFFCE80, 0x64);
+            wr16(0xFFCEC0, 0x64);
+            wr8(0xFFCE80 + OBJ_SPRITE_SET, 0);
+            wr8(0xFFCEC0 + OBJ_SPRITE_SET, 0xFF);
+        }
+        wr16(BIKE_SPEED, 0x53);
+        obj_approach(obj);
+        if ((int16_t)rd16(obj + OBJ_DISTANCE) >= 0x1FF0) {
+            wr32(BIKE_SPEED, 0);
+            wr16(obj + OBJ_Z, 0xBF);
+            wr16(obj + OBJ_SCREEN_Y, 0x15F);
+            wr16(0xFFC8A8, 0xFFFF);
+            sound_command(0x86);
+            wr32(0xFFC7D0, 0x00B4AA);        /* upload list for the ceremony */
+            wr16(0xFFC7CE, 0);
+            wr16(0xFFC7CC, 2);
+            wr16(obj + OBJ_HANDLER, 0x58);
+            obj_pick_sprite(obj, ROM_DEPTH_SPRITES_NEAR);
+            obj_add_to_layer(obj);
+            return;
+        }
+    } else if ((int16_t)rd16(0xFF06BC) >= 0xFA0) {
+        wr16(0xFF06BC, rd16(0xFF06BC) - 0x80);
+        wr16(obj + OBJ_DISTANCE, rd16(0xFF06BC));
+    } else if (!rd16(0xFF06C0)) {
+        wr16(0xFF06C0, 0xFFFF);
+        if (!rd16(HUD_HIDDEN)) {
+            int k;
+            nemesis_to_ram(0x04D2FE, 0xFF7000);
+            wr32(0xFFC7D0, 0x00B4B4);
+            wr16(0xFFC7CE, 0);
+            wr16(0xFFC7CC, 2);
+            for (k = 0; k < 16; k++)
+                wr16(0xFFD3A0 + 2 * k, rd16(0x00B598 + 2 * k));
+            wr8(VDP_PALETTE_DIRTY, rd8(VDP_PALETTE_DIRTY) | 1);
+            wr16(obj + GOAL_STARTED, 0xFFFF);
+            for (k = 0; k < 5; k++)
+                wr16(0xFFCC40 + OBJ_SIZE * k, 0);
+        }
+    }
+    obj_project_distance(obj);
+    obj_pick_sprite(obj, ROM_DEPTH_SPRITES_NEAR);
+    obj_add_to_layer(obj);
+}
+
+/*
+ * The goal ceremony ($715E): starts the two figures (handlers $5C and
+ * $60) and the course's palette, then steps through the course's
+ * animation (sprite maps from the table at $B5B8, one every 14 frames;
+ * after 21, a pause, then the end of the ceremony: $FF051A).
+ */
+#define CEREMONY_TABLE   0x04    /* long: the course's sprite map list */
+#define CEREMONY_DONE    0x08
+static void obj_goal_ceremony(uint32_t obj)
+{
+    if (!rd16(OBJECTS_FROZEN)) {
+        int8_t t;
+        if (!(rd8(obj + OBJ_FLAGS) & 1)) {
+            int k;
+            if (rd16(0xFFC7CC)) {
+                obj_add_to_layer(obj);
+                return;
+            }
+            wr8(obj + OBJ_FLAGS, rd8(obj + OBJ_FLAGS) | 1);
+            wr16(obj + OBJ_Z, 0xBF);
+            wr16(obj + CEREMONY_DONE, 0);
+            wr16(obj + OBJ_SCREEN_X, 0x120);
+            wr16(obj + OBJ_SCREEN_Y, 0x15F);
+            wr16(obj + OBJ_SPRITE_MAP, 0x402C);
+            wr8(obj + OBJ_SPRITE_SET, 0x5A);
+            wr8(obj + OBJ_TIMER, 0xFF);
+            wr16(0xFFCE00, 0x5C);
+            wr16(0xFFCE40, 0x60);
+            wr32(obj + CEREMONY_TABLE, rd32(0x00B5B8 + 4 * rd16(0xFF060C)));
+            for (k = 0; k < 8; k++)
+                wr16(0xFFD390 + 2 * k, rd16(0x00B588 + 2 * k));
+            wr8(VDP_PALETTE_DIRTY, rd8(VDP_PALETTE_DIRTY) | 1);
+        }
+        t = (int8_t)(rd8(obj + OBJ_SPRITE_SET) - 1);
+        wr8(obj + OBJ_SPRITE_SET, (uint8_t)t);
+        if (t < 0) {
+            if (rd16(obj + CEREMONY_DONE)) {
+                wr8(0xFF051A, 0xFF);
+            } else {
+                uint8_t n = (uint8_t)(rd8(obj + OBJ_TIMER) + 1);
+                wr8(obj + OBJ_SPRITE_SET, 0x0E);
+                wr8(obj + OBJ_TIMER, n);
+                if (n >= 0x15) {
+                    wr8(obj + OBJ_SPRITE_SET, 0x3C);
+                    wr16(obj + CEREMONY_DONE, rd16(obj + CEREMONY_DONE) + 1);
+                }
+                wr16(obj + OBJ_SPRITE_MAP, rd16(rd32(obj + CEREMONY_TABLE) + 2 * n));
+            }
+        }
+    }
+    obj_add_to_layer(obj);
+}
+
+/*
+ * A figure walking in from the left ($7162; not on the first course):
+ * every 15 frames a step from the table at $B6C6 (x step, sprite map);
+ * on the last course, the walk repeats once with the table at $B702.
+ */
+#define WALK_STEP        0x04
+#define WALK_ROUND       0x08
+static void obj_goal_walker(uint32_t obj)
+{
+    if (!(rd8(obj + OBJ_FLAGS) & 1)) {
+        wr8(obj + OBJ_FLAGS, rd8(obj + OBJ_FLAGS) | 1);
+        if (!rd16(0xFF060C)) {
+            obj_free(obj);
+            return;
+        }
+        wr16(obj + OBJ_TILE_BASE, 0);
+        wr16(obj + WALK_STEP, 0);
+        wr16(obj + WALK_ROUND, 0);
+        wr16(obj + OBJ_Z, 0xBF);
+        wr16(obj + OBJ_SCREEN_X, 0x55);
+        wr16(obj + OBJ_SCREEN_Y, 0x154);
+        wr16(obj + OBJ_SPRITE_MAP, 0x40D0);
+        wr8(obj + OBJ_SPRITE_SET, 0x78);
+    }
+    if (!rd16(OBJECTS_FROZEN)) {
+        uint8_t t = (uint8_t)(rd8(obj + OBJ_SPRITE_SET) - 1);
+        wr8(obj + OBJ_SPRITE_SET, t);
+        if (!t) {
+            uint32_t step = (rd16(obj + WALK_ROUND) ? 0x00B702 : 0x00B6C6) + (uint16_t)(rd16(obj + WALK_STEP) * 4);
+            wr8(obj + OBJ_SPRITE_SET, 0x0F);
+            wr16(obj + OBJ_SCREEN_X, rd16(obj + OBJ_SCREEN_X) + rd16(step));
+            wr16(obj + OBJ_SPRITE_MAP, rd16(step + 2));
+            wr16(obj + WALK_STEP, rd16(obj + WALK_STEP) + 1);
+            if (rd16(obj + WALK_STEP) >= 0x0F)
+                wr16(obj + WALK_STEP, 0x0E);
+            if (rd16(obj + WALK_STEP) == 0x0D && rd16(0xFF060C) == 3) {
+                wr16(obj + WALK_STEP, 0);
+                wr16(obj + WALK_ROUND, rd16(obj + WALK_ROUND) + 1);
+            }
+        }
+    }
+    obj_add_to_layer(obj);
+}
+
+/*
+ * A figure running in from the right ($7166; from the third course on),
+ * four frames of animation, stopping at x $14C; it holds still once the
+ * ceremony's animation is past its 21st frame.
+ */
+#define RUN_FRAME        0x18
+static void obj_goal_runner(uint32_t obj)
+{
+    if (!(rd8(obj + OBJ_FLAGS) & 1)) {
+        wr8(obj + OBJ_FLAGS, rd8(obj + OBJ_FLAGS) | 1);
+        if (rd16(0xFF060C) < 2) {
+            obj_free(obj);
+            return;
+        }
+        wr16(obj + OBJ_TILE_BASE, 0);
+        wr16(obj + RUN_FRAME, 0);
+        wr16(obj + OBJ_SCREEN_X, 0x1E0);
+        wr16(obj + OBJ_SCREEN_Y, 0x157);
+        wr16(obj + OBJ_Z, 0xBE);
+        wr8(obj + OBJ_SPRITE_SET, 0xB4);
+    }
+    if (rd8(0xFFC940 + OBJ_TIMER) >= 0x15) {
+        wr16(obj + OBJ_SPRITE_MAP, 0x41C2);
+    } else {
+        int8_t t = (int8_t)(rd8(obj + OBJ_SPRITE_SET) - 1);
+        wr8(obj + OBJ_SPRITE_SET, (uint8_t)t);
+        if (t < 0) {
+            uint16_t f = (uint16_t)(rd16(obj + RUN_FRAME) + 1);
+            wr8(obj + OBJ_SPRITE_SET, 5);
+            wr16(obj + RUN_FRAME, f);
+            wr16(obj + OBJ_SPRITE_MAP, rd16(0x00B7B0 + 2 * (f & 3)));
+            wr16(obj + OBJ_SCREEN_X, rd16(obj + OBJ_SCREEN_X) - 3);
+            if (rd16(obj + OBJ_SCREEN_X) < 0x14C)
+                wr16(obj + OBJ_SCREEN_X, 0x14C);
+        }
+    }
+    obj_add_to_layer(obj);
+}
+
+/*
+ * A looping figure ($716A): every 8 frames a position and sprite map
+ * from the table at $B82A ($B848 when byte $2D is set), five entries,
+ * the last two repeating.
+ */
+static void obj_goal_loop(uint32_t obj)
+{
+    int8_t t;
+    if (!(rd8(obj + OBJ_FLAGS) & 1)) {
+        wr8(obj + OBJ_FLAGS, rd8(obj + OBJ_FLAGS) | 1);
+        wr16(obj + OBJ_TILE_BASE, 0x2000);
+        wr16(obj + OBJ_SPRITE_MAP, 0);
+        wr16(obj + OBJ_Z, 0);
+        wr16(obj + WALK_STEP, 0);
+        wr8(obj + OBJ_TIMER, 0x17);
+    }
+    t = (int8_t)(rd8(obj + OBJ_TIMER) - 1);
+    wr8(obj + OBJ_TIMER, (uint8_t)t);
+    if (t < 0) {
+        uint32_t e = (rd8(obj + OBJ_SPRITE_SET) ? 0x00B848 : 0x00B82A) + (int16_t)rd16(obj + WALK_STEP);
+        wr8(obj + OBJ_TIMER, 7);
+        wr16(obj + OBJ_SCREEN_X, rd16(e));
+        wr16(obj + OBJ_SCREEN_Y, rd16(e + 2));
+        wr16(obj + OBJ_SPRITE_MAP, rd16(e + 4));
+        wr16(obj + WALK_STEP, rd16(obj + WALK_STEP) + 6);
+        if (rd16(obj + WALK_STEP) >= 0x1E)
+            wr16(obj + WALK_STEP, 0x18);
+    }
+    obj_add_to_layer(obj);
+}
+
 /* Handlers by index; NULL ones still run recompiled. */
 static void (*const handlers[25])(uint32_t obj) = {
     [(0x710A - 0x710A) / 4] = obj_debris,
@@ -1783,6 +2020,11 @@ static void (*const handlers[25])(uint32_t obj) = {
     [(0x714E - 0x710A) / 4] = obj_rival,
     [(0x7152 - 0x710A) / 4] = obj_column_stopper,
     [(0x7156 - 0x710A) / 4] = obj_retire,
+    [(0x715A - 0x710A) / 4] = obj_goal_line,
+    [(0x715E - 0x710A) / 4] = obj_goal_ceremony,
+    [(0x7162 - 0x710A) / 4] = obj_goal_walker,
+    [(0x7166 - 0x710A) / 4] = obj_goal_runner,
+    [(0x716A - 0x710A) / 4] = obj_goal_loop,
 };
 
 /* ------------------------------------------------------ sprite table */

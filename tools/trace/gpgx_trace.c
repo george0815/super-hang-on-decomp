@@ -11,6 +11,7 @@
  *                   "UDLRABCS", e.g. "200 210 S" holds Start)
  * -w FILE.wav       also record the audio output
  * -a FRAME OUT.txt  autopilot from FRAME: hold B and steer towards the road
+ *                   (env AP_TH, AP_AVOID, AP_TURBO, AP_SLOW tune it)
  *                   centre; the inputs used are written to OUT.txt as an
  *                   input script (so gpgx_fncap can replay the session)
  * -s FRAME          also write DIR/frame_NNNNN.ppm and DIR/frame_NNNNN.vdp
@@ -78,6 +79,9 @@ int sdl_input_update(void)
         break;
       }
     }
+    /* AP_SLOW: off the throttle when this far to one side */
+    if (getenv("AP_SLOW") && (curve > atoi(getenv("AP_SLOW")) || curve < -atoi(getenv("AP_SLOW"))))
+      pad &= ~INPUT_B;
     if (curve > th) pad |= autopilot_dir > 0 ? INPUT_LEFT : INPUT_RIGHT;
     if (curve < -th) pad |= autopilot_dir > 0 ? INPUT_RIGHT : INPUT_LEFT;
   }

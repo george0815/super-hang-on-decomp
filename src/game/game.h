@@ -110,6 +110,7 @@ void course_graphics(void);
 void bike_graphics(void);
 void dma_slots_run(void);
 void hud_eight_tiles(void);
+void hud_big_digits(uint32_t command, uint32_t bcd_addr);
 
 /* ------------------------------------------------------------- race.c */
 void race_place_objects(void);

@@ -75,3 +75,5 @@ code 005082
 code 006A3E OptionsSetup
 code 006A6C
 code 00E1A4 RankingInsert
+code 00B874 GoalFrame
+code 00B95C GoalSetup

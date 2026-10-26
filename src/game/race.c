@@ -2750,3 +2750,129 @@ void mode_race_68k(void)
     wait_frame_ticks();
     race_frame();
 }
+
+/* ------------------------------------------------------------- goal */
+
+/* Game mode $1C's setup ($B95C): original mode waits 30 frames after
+   the goal; arcade mode moves the window plane. */
+static void goal_setup(void)
+{
+    if (rd16(HUD_HIDDEN))
+        wr16(0xFFC70E, 0x1E);
+    else
+        wr16(VDP_CTRL, 0x921C);
+}
+
+void goal_setup_68k(void) { goal_setup(); }
+
+/* One bonus point: 1000 on the score ($B974). */
+static void goal_bonus_tick(void)
+{
+    wr32(0xFF0548, 0x100000);
+    score_add();
+}
+
+void goal_bonus_tick_68k(void) { goal_bonus_tick(); }
+
+/*
+ * The arcade goal bonus ($B984): three texts, then the bonus from the
+ * time left (BCD seconds x 100, plus 10 minus the tenths' digit) shown
+ * in big digits twice, and converted to binary to count down.
+ */
+#define GOAL_BONUS       0xFF04E8
+static void goal_bonus_show(void)
+{
+    uint32_t t = 0x00BA3C;
+    uint16_t v;
+    uint8_t tenths, b;
+    int k;
+    for (k = 0; k < 3; k++, t += 10)
+        vdp_copy(rd32(t), rd32(t + 6), rd16(t + 4) + 1);
+    v = (uint16_t)(rd8(CLOCK) << 8);
+    tenths = rd8(0xFF04EF) & 0xF0;
+    if (tenths)
+        v |= (uint16_t)(10 - (tenths >> 4));
+    wr16(GOAL_BONUS, v);
+    hud_big_digits(0x550E0003, GOAL_BONUS);
+    hud_big_digits(0x55120003, GOAL_BONUS + 1);
+    wr32(VDP_CTRL, 0x55920003);
+    wr16(VDP_DATA, 0xA638);
+    hud_big_digits(0x553A0003, GOAL_BONUS + 1);
+    hud_big_digits(0x55380003, GOAL_BONUS);
+    b = rd8(GOAL_BONUS);
+    wr16(GOAL_BONUS, (uint16_t)((b & 0xF) * 10 + (b >> 4) * 100 + (rd8(GOAL_BONUS + 1) & 0xF)));
+}
+
+void goal_bonus_show_68k(void) { goal_bonus_show(); }
+
+/*
+ * A frame past the goal ($B874): the race goes on without the clock or
+ * checkpoints. Original mode, once the goal sequence is over and a delay
+ * has passed, takes the times to the command screen (the parts wear);
+ * arcade mode counts the bonus onto the score, two points a frame, and
+ * when the ceremony ends goes on to the ranking.
+ */
+static void goal_frame(void)
+{
+    if (rd16(HUD_HIDDEN)) {
+        if (rd16(0xFF06C0)) {
+            wr16(0xFFC70E, rd16(0xFFC70E) - 1);
+            if (!rd16(0xFFC70E)) {
+                wr32(0xFFB63C, rd32(0xFFC832));
+                wr32(0xFFB640, rd32(0xFFC83A));
+                wr8(0xFFB655, rd8(0xFFB655) | 2);
+                fade_out();
+                wr16(0xFFC722, 0);
+                wr16(GAME_MODE, 0x24);
+                return;
+            }
+        }
+    } else if (rd16(0xFF06C0)) {
+        int k;
+        if (!rd8(0xFF0519)) {
+            goal_bonus_show();
+            wr8(0xFF0519, 0xFF);
+        }
+        for (k = 0; k < 2 && (int16_t)rd16(GOAL_BONUS) > 0; k++) {
+            wr16(GOAL_BONUS, rd16(GOAL_BONUS) - 1);
+            goal_bonus_tick();
+        }
+        if (rd8(0xFF051A)) {
+            wr8(0xFF051A, 0);
+            wr8(0xFF0519, 0);
+            wr16(0xFF06C0, 0);
+            wr16(GAME_MODE, 0x34);
+            wr16(OBJECTS_FROZEN, 0xFFFF);
+        }
+    }
+    race_stage();
+    stage_geometry();
+    race_rivals();
+    race_place_objects();
+    race_turns();
+    race_sounds();
+    race_input();
+    race_speed();
+    race_drift();
+    race_build_road();
+    road_hills();
+    road_rows();
+    hill_columns();
+    hud_numbers();
+    wait_ticks_4(0x00B94C);
+    objects_update();
+    scroll_tables();
+}
+
+void goal_frame_68k(void) { goal_frame(); }
+
+/* Game mode $1C ($6D0E): the setup, or one frame past the goal. */
+void mode_goal_68k(void)
+{
+    if (mode_first_call()) {
+        goal_setup();
+        return;
+    }
+    wait_frame_ticks();
+    goal_frame();
+}

@@ -502,7 +502,7 @@ static void hud_big_digits_base(uint32_t command, uint32_t bcd_addr, uint16_t ba
     vdp_copy_rect(command, buf, 2, 2);
 }
 
-static void hud_big_digits(uint32_t command, uint32_t bcd_addr)
+void hud_big_digits(uint32_t command, uint32_t bcd_addr)
 {
     hud_big_digits_base(command, bcd_addr, 0);
 }
