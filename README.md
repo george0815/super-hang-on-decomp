@@ -79,8 +79,10 @@ Differential testing needs Genesis Plus GX cloned into `genesis-plus-gx/`:
 SNES port (in progress; see [docs/snes-port.md](docs/snes-port.md)). It needs
 cc65 and Snes9x checked out into `tools/ext` (see `tools/snes/Makefile`):
 
-    build/livetest sho.md 1500 tests/inputs/attract.txt build/snap 600
+    mkdir -p build/snap && build/livetest sho.md 1500 tests/inputs/attract.txt build/snap 600
     make snes-snap SNAP=build/snap/live_00600.vdp   # that screen on the SNES
+    make snes                                       # build/snes/shangon.sfc (SA-1)
+    make snes-shots FRAMES=900 SHOTS="300-899"      # screenshots, BW-RAM dump
 
 ## ROM map (so far)
 

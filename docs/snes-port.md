@@ -61,6 +61,19 @@ variables with the Genesis reference (`build/ref/*.vtrace`, 68000 RAM at
 every VBlank) race frame by race frame. A mismatch then points at the
 routine that diverged, as `make verify` does for the C.
 
+**How it is checked so far:**
+- `make snes-shots` takes screenshots and dumps BW-RAM.
+- Bank $40 is compared byte for byte with the 68000 RAM that
+  `build/livetest` saves next to its screenshots.
+- The SNES runs behind the Genesis: its screen setups take longer, and it
+  waits for their uploads before turning the display on.
+
+**Timing.** The recorded input scripts press buttons at given frames.
+Driving a race on the SNES with them will need one of two things:
+- the SNES's setups paced to take as many frames as the Genesis's;
+- or input scripts keyed to the game's own frame count, with
+  `snesrun` reading the counter from RAM each frame.
+
 ## Video
 
 | Genesis | SNES |
@@ -141,8 +154,17 @@ approximated by samples and the DSP's ADSR.
 2. Done: SA-1 skeleton. Both CPUs boot, there is a VBlank upload queue
    with PPU register shadows, the pad is read, and assets are extracted
    from `sho.md` at build time (Nemesis decoding).
-3. Logo done: `snes/logo.s` matches the Genesis frame for frame (three
-   frames later). Title next, which needs the object system and sprites.
+3. Logo and title running:
+   - `snes/logo.s` matches the Genesis frame for frame, three frames
+     later.
+   - The title (`snes/title.s`) runs on the VDP layer (`snes/vdp.s`),
+     the object system (`snes/objects.s`) and the sprite renderer
+     (`snes/sprites.s`).
+   - Compared with the Genesis 45 frames earlier, its object table,
+     sprite table, palette and menu state match byte for byte.
+   - Known: the landed letters need more than 34 OBJ slices on some lines,
+     so the left of the H is lost. Cutting groups with an empty column
+     into 8x8 OBJs may be enough.
 4. Race renderer: road by HDMA, sprite frames, HUD.
 5. Race logic, compared variable by variable with the recordings.
 6. Menus: course and music select, password, shop, ranking, options.
