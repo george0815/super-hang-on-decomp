@@ -28,6 +28,7 @@ PALETTE_PENDING = $003016 ; byte: the VBlank took the palette: upload it
 SA1_IRQ_DP   = $3300    ; the SA-1 VBlank interrupt's own direct page
 PAD_HELD_MD  = $003018  ; byte: the pad as the Genesis's S A C B R L D U
 UPLOAD_LIST  = $00301A  ; word: the ready upload list (bank $41)
+HDMA_TABLES  = $00301C  ; word: the HDMA tables to show (vdp.s, bank $41)
 
 ; The SA-1's direct page and stack are also in I-RAM
 SA1_DP       = $3100

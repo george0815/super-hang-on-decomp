@@ -25,7 +25,7 @@
 .export vdp_reset, vdp_command, vdp_write, vdp_read, vdp_register
 .export vdp_ctrl_write, vdp_data_write, vdp_data_read, vdp_status
 .export vdp_tiles, vdp_flush
-.export vdp_pending, tile_gen
+.export vdp_pending, tile_gen, hdma_bufs
 .import upload, upload_vram, upload_fits
 
 ROM_VDP_REGISTER_DEFAULTS = $0086A0     ; 19 register-write words
@@ -47,7 +47,7 @@ PLANE_B_MAP = $5000
 MAX_SLOTS   = $3800 / 16        ; 896 background tiles
 CROP        = 32                ; Genesis columns cut off on the left
 
-UPLOAD_TILES = 192              ; at most this many tiles per frame,
+UPLOAD_TILES = 128              ; at most this many tiles per frame,
 UPLOAD_ROWS  = 48               ; and map rows
 
 ; direct page (SA1_DP + offset; sa1.s uses $00-$1F, logo.s $20-$3F)
@@ -80,6 +80,17 @@ dma_left    = $78       ; DMA: words left,
 dma_src     = $7A       ; source (24 bits; $7A-$7C)
 cram_dirty  = $7E
 
+; the HDMA builder's own (I-RAM, past the direct page's other users)
+hdma_cur    = $D8       ; (free since the modes are compiled C)
+win_end     = $DA
+win_down    = $DC
+vs_table    = $DE
+hs_mode     = $9A
+hline       = $9C
+gline       = $9E
+hsc         = $A0
+hofs        = $A2
+
 .segment "CODE"
 .a16
 .i16
@@ -97,6 +108,7 @@ vdp_reset:
     bcc :-
     stz z:ctrl_pending
     stz z:fill_pending
+    stz z:hdma_cur
     lda #1
     sta z:vdp_on
     lda #0
@@ -1111,56 +1123,242 @@ ppu_setup:
     sta f:SH_TM
     lda #$00 | 3            ; 8x8 and 16x16 OBJs at $6000
     sta f:SH_OBSEL
-    lda z:VDP_REGS + 18     ; the window from the top over all 28 rows?
     rep #$20
     .a16
-    and #$009F
-    cmp #28
+    jmp hdma_build
+
+; ---------------------------------------------------------------- HDMA
+
+; Each line's BG1 map and both layers' scroll, as HDMA tables (the NMI
+; points channels 1-3 at them, snes/boot.s): BG1 shows the window plane on
+; the lines the window covers (the race's HUD), plane A elsewhere. The
+; horizontal scroll comes from the table in VRAM ($CC00: whole screen,
+; per 8 lines or per line, register 11); the vertical one from VSRAM, or
+; in races from the table the HBlank interrupt copies a line at a time
+; ($FF1500 + the buffer select at $FF0580: line l takes entry l).
+; 225 lines: the SNES's line 0 is not shown and copies line 1.
+HDMA_LINES  = 225
+SC_SIZE     = 2 + HDMA_LINES + 1          ; two headers, the bytes, the end
+OFS_SIZE    = 2 + HDMA_LINES * 4 + 1
+HDMA_BUF    = SC_SIZE + 2 * OFS_SIZE      ; one set of tables
+VSCROLL_LINES = $1500
+SCROLL_BUFFER_SEL = $0580
+
+hdma_build:
+    lda z:hdma_cur          ; the set not shown now
+    eor #HDMA_BUF
+    sta z:hdma_cur
+    ; the window's lines: from the top (or bottom) to row R
+    lda z:VDP_REGS + 18
+    and #$001F
+    asl
+    asl
+    asl
+    sta z:win_end           ; R * 8
+    lda z:VDP_REGS + 18
+    and #$0080
+    sta z:win_down
+    ; per-line vertical scroll in races
+    stz z:vs_table
+    lda z:VDP_REGS
+    and #$0010              ; line interrupts on
+    beq :+
+    ldw VBLANK_HANDLER
+    cmp #8
+    bne :+
+    ldw SCROLL_BUFFER_SEL
+    clc
+    adc #VSCROLL_LINES
+    sta z:vs_table
+:   lda z:VDP_REGS + 11
+    and #$0003
+    sta z:hs_mode
+    ; headers: 112 and 113 lines, one entry each
+    ldx z:hdma_cur
+    sep #$20
+    .a8
+    lda #$80 | 112
+    sta f:hdma_bufs, x
+    sta f:hdma_bufs + SC_SIZE, x
+    sta f:hdma_bufs + SC_SIZE + OFS_SIZE, x
+    rep #$20
+    .a16
+    stz z:hline             ; SNES line
+    lda z:hdma_cur
+    inc
+    sta z:hsc               ; where the next BG1SC byte goes
+    clc
+    adc #SC_SIZE
+    sta z:hofs              ; and the next scroll entries (BG2's OFS_SIZE on)
+@line:
+    lda z:hline
+    beq :+
+    dec                     ; the Genesis line
+:   sta z:gline
+    ; BG1: the window, or plane A
+    jsr in_window
     bcc @plane_a
-    cmp #$80                ; (bit 7: from the bottom)
-    bcs @plane_a
     sep #$20
     .a8
     lda #(WINDOW_MAP >> 10 << 2) | 1
-    sta f:SH_BG1SC
+    ldx z:hsc
+    sta f:hdma_bufs, x
     rep #$20
     .a16
     lda #CROP
-    sta f:SH_BG1HOFS
+    ldx z:hofs
+    sta f:hdma_bufs, x
     lda #$FFFF
-    sta f:SH_BG1VOFS
+    sta f:hdma_bufs + 2, x
     bra @plane_b
 @plane_a:
     sep #$20
     .a8
     lda #(PLANE_A_MAP >> 10 << 2) | 3
-    sta f:SH_BG1SC
+    ldx z:hsc
+    sta f:hdma_bufs, x
     rep #$20
     .a16
-    lda f:VRAM_MIRROR + HSCROLL
+    jsr hscroll_entry       ; X = its VRAM address
+    lda f:VRAM_MIRROR, x
     xba
     eor #$FFFF
     sec
     adc #CROP               ; CROP - scroll
     and #$03FF
-    sta f:SH_BG1HOFS
-    ; (the vertical scroll, VSRAM 0)
-    lda f:vsram
+    ldx z:hofs
+    sta f:hdma_bufs, x
+    jsr vscroll_a
     dec
     and #$03FF
-    sta f:SH_BG1VOFS
+    ldx z:hofs
+    sta f:hdma_bufs + 2, x
 @plane_b:
-    lda f:VRAM_MIRROR + HSCROLL + 2
+    jsr hscroll_entry
+    lda f:VRAM_MIRROR + 2, x
     xba
     eor #$FFFF
     sec
     adc #CROP
     and #$03FF
-    sta f:SH_BG2HOFS
-    lda f:vsram + 2
+    ldx z:hofs
+    sta f:hdma_bufs + OFS_SIZE, x
+    jsr vscroll_b
     dec
     and #$03FF
-    sta f:SH_BG2VOFS
+    ldx z:hofs
+    sta f:hdma_bufs + OFS_SIZE + 2, x
+    ; next line; after 112, the second header
+    inc z:hsc
+    lda z:hofs
+    clc
+    adc #4
+    sta z:hofs
+    inc z:hline
+    lda z:hline
+    cmp #112
+    bne :+
+    ldx z:hsc
+    sep #$20
+    .a8
+    lda #$80 | (HDMA_LINES - 112)
+    sta f:hdma_bufs, x
+    rep #$20
+    .a16
+    ldx z:hofs
+    sep #$20
+    .a8
+    sta f:hdma_bufs, x
+    sta f:hdma_bufs + OFS_SIZE, x
+    rep #$20
+    .a16
+    inc z:hsc
+    inc z:hofs
+:   lda z:hline
+    cmp #HDMA_LINES
+    beq :+
+    jmp @line
+:   ldx z:hsc               ; the ends
+    sep #$20
+    .a8
+    lda #0
+    sta f:hdma_bufs, x
+    ldx z:hofs
+    sta f:hdma_bufs, x
+    sta f:hdma_bufs + OFS_SIZE, x
+    rep #$20
+    .a16
+    lda z:hdma_cur
+    sta f:HDMA_TABLES
+    rts
+
+; Is Genesis line gline in the window? (carry)
+in_window:
+    lda z:gline
+    cmp z:win_end
+    lda z:win_down
+    bne :+
+    bcc @yes                ; from the top: lines above row R
+    clc
+    rts
+:   bcs @yes                ; from the bottom: lines from row R
+    clc
+    rts
+@yes:
+    sec
+    rts
+
+; X = the VRAM address of line gline's horizontal scroll entry.
+hscroll_entry:
+    lda z:hs_mode
+    beq @screen
+    cmp #2
+    lda z:gline
+    bcc @line               ; (mode 1: as per line)
+    bne @line
+    and #$FFF8              ; per 8 lines
+@line:
+    asl
+    asl
+    clc
+    adc #HSCROLL
+    tax
+    rts
+@screen:
+    ldx #HSCROLL
+    rts
+
+; Plane A's and B's vertical scroll on line gline.
+vscroll_a:
+    lda z:vs_table
+    beq @vsram
+    lda z:gline
+    beq @vsram
+    asl
+    asl
+    clc
+    adc z:vs_table
+    tax
+    ldw 0, x
+    rts
+@vsram:
+    lda f:vsram
+    rts
+
+vscroll_b:
+    lda z:vs_table
+    beq @vsram
+    lda z:gline
+    beq @vsram
+    asl
+    asl
+    clc
+    adc z:vs_table
+    tax
+    ldw 2, x
+    rts
+@vsram:
+    lda f:vsram + 2
     rts
 
 ; The colours (CRAM) as SNES colours, if they changed: to CGRAM 0-63 (the
@@ -1240,6 +1438,7 @@ level:
     rts
 
 .segment "BWRAM"
+hdma_bufs:      .res 2 * HDMA_BUF
 cram:           .res 128
 cgram_buffer:   .res 128
 PENDING_SIZE = 2048

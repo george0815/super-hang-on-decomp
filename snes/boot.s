@@ -174,6 +174,7 @@ nmi:
     sta SHOWN_INIDISP
 :   jsr run_uploads
     jsr apply_shadows
+    jsr apply_hdma
     stz UPLOAD_READY
 @no_uploads:
     ; the pad for the SA-1's VBlank interrupt, which plays the Genesis's
@@ -253,6 +254,46 @@ run_uploads:
     sep #$20
     bra @next
 @done:
+    rts
+
+; Point HDMA channels 1-3 at the tables the SA-1 built (vdp.s): BG1's
+; map, BG1's scroll, BG2's scroll.
+.import hdma_bufs
+HDMA_LINES = 225
+SC_SIZE    = 2 + HDMA_LINES + 1
+OFS_SIZE   = 2 + HDMA_LINES * 4 + 1
+
+apply_hdma:
+    rep #$20
+    .a16
+    lda HDMA_TABLES
+    clc
+    adc #.loword(hdma_bufs)
+    sta A1T(1)
+    clc
+    adc #SC_SIZE
+    sta A1T(2)
+    clc
+    adc #OFS_SIZE
+    sta A1T(3)
+    sep #$20
+    .a8
+    lda #^hdma_bufs
+    sta A1B(1)
+    sta A1B(2)
+    sta A1B(3)
+    stz DMAP(1)             ; one register
+    lda #<BG1SC
+    sta BBAD(1)
+    lda #$03                ; two registers, twice each
+    sta DMAP(2)
+    sta DMAP(3)
+    lda #<BG1HOFS
+    sta BBAD(2)
+    lda #<BG2HOFS
+    sta BBAD(3)
+    lda #$0E
+    sta HDMAEN
     rts
 
 apply_shadows:
