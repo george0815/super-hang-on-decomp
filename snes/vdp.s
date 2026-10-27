@@ -23,9 +23,10 @@
 .include "gen/assets.inc"
 
 .export vdp_reset, vdp_command, vdp_write, vdp_read, vdp_register
-.export vdp_copy, vdp_fill, vdp_copy_rect, vdp_clear, vdp_tiles, vdp_flush
+.export vdp_ctrl_write, vdp_data_write, vdp_data_read, vdp_status
+.export vdp_tiles, vdp_flush
 .export vdp_pending, tile_gen
-.import upload_vram, upload_fits
+.import upload, upload_vram, upload_fits
 
 ROM_VDP_REGISTER_DEFAULTS = $0086A0     ; 19 register-write words
 VDP_MODE_SHADOW = $C700
@@ -72,6 +73,12 @@ budget      = $66
 t0          = $68
 t1          = $6A
 run_end     = $6E       ; upload_tiles: VRAM address after the last upload
+ctrl_pending = $72      ; the first half of a command was written
+cmd_first   = $74       ; (that half)
+fill_pending = $76      ; a DMA fill waits for its data word
+dma_left    = $78       ; DMA: words left,
+dma_src     = $7A       ; source (24 bits; $7A-$7C)
+cram_dirty  = $7E
 
 .segment "CODE"
 .a16
@@ -88,19 +95,8 @@ vdp_reset:
     inx
     cpx #24
     bcc :-
-    ldx #0
-:   phx
-    ldrom ROM_VDP_REGISTER_DEFAULTS, x
-    jsr vdp_register
-    plx
-    inx
-    inx
-    cpx #19 * 2
-    bcc :-
-    lda f:MDROM + ROM_VDP_REGISTER_DEFAULTS
-    sta a:VDP_MODE_SHADOW
-    lda f:MDROM + ROM_VDP_REGISTER_DEFAULTS + 2
-    sta a:VDP_MODE_SHADOW + 2
+    stz z:ctrl_pending
+    stz z:fill_pending
     lda #1
     sta z:vdp_on
     lda #0
@@ -232,8 +228,19 @@ vdp_write:
     jsr vram_word
     bra @next
 @not_vram:
-    cpx #5
-    bne @next               ; (the palette goes through the RAM buffer)
+    cpx #3
+    bne :+
+    pha                     ; CRAM
+    lda z:vdp_addr
+    and #$007E
+    tax
+    pla
+    sta f:cram, x
+    lda #1
+    sta z:cram_dirty
+    bra @next
+:   cpx #5
+    bne @next
     ldx z:vdp_addr
     cpx #$50
     bcs @next
@@ -244,6 +251,148 @@ vdp_write:
     clc
     adc z:vdp_addr
     sta z:vdp_addr
+    rts
+
+; ------------------------------------------------------------ the ports
+
+; A word written to the control port: a register, or half of a command.
+; A command with CD5 set starts a DMA (when register 1 allows it).
+vdp_ctrl_write:
+    ldx z:ctrl_pending
+    bne @second
+    pha
+    and #$C000
+    cmp #$8000
+    bne @first
+    pla
+    jmp vdp_register
+@first:
+    pla
+    sta z:cmd_first
+    lda #1
+    sta z:ctrl_pending
+    rts
+@second:
+    stz z:ctrl_pending
+    tax
+    lda z:cmd_first
+    jsr vdp_command
+    lda z:vdp_code
+    and #$0020
+    beq @done
+    lda z:vdp_code
+    and #$001F
+    sta z:vdp_code
+    lda z:VDP_REGS + 1
+    and #$0010
+    beq @done
+    lda z:VDP_REGS + 23
+    and #$00C0
+    cmp #$0080
+    beq @fill
+    bcs @done               ; (VRAM copies: not used)
+    jmp dma_copy
+@fill:
+    lda #1
+    sta z:fill_pending
+@done:
+    rts
+
+; A word written to the data port (the data of a pending DMA fill).
+vdp_data_write:
+    stz z:ctrl_pending
+    ldx z:fill_pending
+    bne dma_fill
+    jmp vdp_write
+
+; A word read from the data port.
+vdp_data_read:
+    stz z:ctrl_pending
+    jmp vdp_read
+
+; The status register: the FIFO empty, no DMA running.
+vdp_status:
+    stz z:ctrl_pending
+    lda #$3400
+    rts
+
+; The DMA length (registers 19-20; 0 = 65536 words) into dma_left.
+dma_length:
+    lda z:VDP_REGS + 19
+    and #$00FF
+    sta z:dma_left
+    lda z:VDP_REGS + 20
+    and #$00FF
+    xba
+    ora z:dma_left
+    sta z:dma_left
+    rts
+
+; A DMA from 68000 memory: the source (registers 21-23, a word address)
+; through the data port, as the target the command set.
+dma_copy:
+    jsr dma_length
+    lda z:VDP_REGS + 21     ; source = (r23 & $7F) << 17 | r22 << 9 | r21 << 1
+    and #$00FF
+    asl
+    sta z:dma_src
+    lda z:VDP_REGS + 22
+    and #$00FF
+    xba
+    asl
+    ora z:dma_src
+    sta z:dma_src
+    lda z:VDP_REGS + 22
+    and #$0080
+    asl                     ; (r22 bit 7 -> bit 8 -> the bank's bit 0)
+    xba
+    sta z:dma_src + 2
+    lda z:VDP_REGS + 23
+    and #$007F
+    asl
+    ora z:dma_src + 2
+    cmp #$00E0
+    bcc :+
+    lda #^MIRROR
+    bra :++
+:   clc
+    adc #^MDROM
+:   sta z:dma_src + 2
+@word:
+    lda [dma_src]
+    xba
+    jsr vdp_write
+    lda z:dma_src
+    clc
+    adc #2
+    sta z:dma_src
+    dec z:dma_left
+    bne @word
+    rts
+
+; A DMA fill (the game only fills with 0): the length's bytes plus one
+; from the address, zeroed.
+dma_fill:
+    stz z:fill_pending
+    jsr dma_length
+    lda z:dma_left
+    inc
+    inc
+    lsr
+    sta z:dma_left          ; words
+    lda z:vdp_addr
+    and #$FFFE
+    tax
+@word:
+    phx
+    lda #0
+    jsr vram_word
+    pla
+    inc
+    inc
+    tax
+    dec z:dma_left
+    bne @word
     rts
 
 ; Read a word through the data port into A (VRAM reads only).
@@ -635,6 +784,7 @@ vdp_pending:
 ; rows that changed, as far as the budgets go; then the scroll and the
 ; layers from the VDP registers.
 vdp_flush:
+    jsr cram_upload
     lda z:next_slot         ; slots running out: start again from the maps
     cmp #MAX_SLOTS - 128
     bcc :+
@@ -693,15 +843,18 @@ upload_tiles:
     sta z:budget
     lda #$FFFF
     sta z:run_end
+    bra @tile
+@exit:
+    rts
 @tile:
     ldx z:pend_head
     cpx z:pend_tail
-    beq @done
+    beq @exit
     dec z:budget
-    bmi @done
+    bmi @exit
     lda #32
     jsr upload_fits
-    bcc @done
+    bcc @exit
     lda f:pending, x
     sta z:tile
     inx
@@ -734,11 +887,20 @@ upload_tiles:
     asl
     cmp z:run_end
     bne @new
-    ldx z:up_pos            ; right after the last upload: make it longer
-    lda f:UPLOADS - 8 + 6, x
+    lda z:up_list           ; right after the last upload: make it longer
+    clc
+    adc z:up_pos
+    tax
+    lda f:$410000 - 8 + 6, x
     clc
     adc #32
-    sta f:UPLOADS - 8 + 6, x
+    sta f:$410000 - 8 + 6, x
+    lda z:up_budget
+    sec
+    sbc #32
+    bcs :+
+    lda #0
+:   sta z:up_budget
     lda z:run_end
     bra @staged
 @new:
@@ -1001,8 +1163,86 @@ ppu_setup:
     sta f:SH_BG2VOFS
     rts
 
+; The colours (CRAM) as SNES colours, if they changed: to CGRAM 0-63 (the
+; BG palettes) and 128-191 (the OBJ palettes); the backdrop is the colour
+; register 7 picks.
+cram_upload:
+    lda z:cram_dirty
+    beq @done
+    lda #128 + 128
+    jsr upload_fits
+    bcc @done
+    stz z:cram_dirty
+    ldx #0
+@colour:
+    lda f:cram, x           ; ----BBB-GGG-RRR-
+    sta z:t0
+    and #$000E
+    jsr level
+    sta z:t1
+    lda z:t0
+    lsr
+    lsr
+    lsr
+    lsr
+    and #$000E
+    jsr level
+    asl
+    asl
+    asl
+    asl
+    asl
+    tsb z:t1
+    lda z:t0
+    xba
+    and #$000E
+    jsr level
+    xba
+    asl
+    asl
+    ora z:t1
+    sta f:cgram_buffer, x
+    inx
+    inx
+    cpx #128
+    bne @colour
+    lda z:VDP_REGS + 7
+    and #$003F
+    asl
+    tax
+    lda f:cgram_buffer, x
+    sta f:cgram_buffer
+    lda #.loword(cgram_buffer)
+    sta z:up_src
+    lda #^cgram_buffer
+    sta z:up_src + 2
+    stz z:up_dst
+    lda #128
+    sta z:up_len
+    lda #UP_CGRAM
+    jsr upload
+    lda #128
+    sta z:up_dst
+    lda #UP_CGRAM
+    jsr upload
+@done:
+    rts
+
+; A colour channel, 3 bits at bit 1 (A = 2v), as 5 bits: v << 2 | v >> 1.
+level:
+    sta z:count
+    asl
+    sta z:width
+    lda z:count
+    lsr
+    lsr
+    ora z:width
+    rts
+
 .segment "BWRAM"
-PENDING_SIZE = 4096
+cram:           .res 128
+cgram_buffer:   .res 128
+PENDING_SIZE = 2048
 ROWS_SIZE    = 64 + 64 + 32
 MAPS_SIZE    = (64 * 64 + 64 * 64 + 64 * 32) * 2
 map_a:          .res 64 * 64 * 2

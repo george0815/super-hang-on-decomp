@@ -148,6 +148,14 @@ void obj_add_to_layer(uint32_t obj);
 void objects_update(void);
 void score_add(void);
 void objects_clear(void);
+
+#ifdef SNES
+/* the SNES port's sprite renderer (snes/sprites.s, through snes/rt.s) */
+void sprites_begin_c(void);
+void sprite_object_c(uint32_t obj);
+void sprites_end_c(void);
+void sprites_hide_c(void);
+#endif
 void race_objects_setup(void);
 
 #endif

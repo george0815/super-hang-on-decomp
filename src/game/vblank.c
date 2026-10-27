@@ -146,6 +146,9 @@ void screen_reset(void)
     vdp_fill(0x40000010, 0, 0x29);
     for (k = 0; k < 0x140; k++)
         wr16(0xFFD100 + 2 * k, 0);
+#ifdef SNES
+    sprites_hide_c();
+#endif
     dma_clear(0x48000003, 0x13F);
     dma_clear(0x40000003, 0x27F);
     dma_clear(0x60000003, 0x1FFF);
@@ -368,12 +371,18 @@ void stage_graphics_load(void)
     dma_copy(0x6D800002, rd32(anim_frame_record() + 4), 0x200);
     rec = anim_frame_record() + 0x12;
     dma_copy(rd32(rec), rd32(rec + 6), rd16(rec + 4));
+#ifndef SNES
     dma_copy_regs(rd32(rec + 6));
+#endif
     wr16(VRAM_CLEAR_STEP, 0xFFFF);
     wr16(ANIM_ROW, stage);
     wr32(VDP_CTRL, 0x71800002);
+#ifdef SNES
+    nemesis_to_vdp(0x018000);
+#else
     cpu.a[0] = 0x018000;
     nemesis_to_vdp_68k();
+#endif
     map_unpack(0x018372);
     for (k = 0; k < 0x3FC; k++)
         wr16(0xFFE100 + 2 * k, rd16(0xFFF2F8 + 2 * k));

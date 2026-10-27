@@ -200,12 +200,11 @@ nmi:
     rti
 
 .a8
-; Run the SA-1's upload list (see mem.inc) on DMA channel 0.
+; Run the SA-1's ready upload list (see mem.inc) on DMA channel 0.
 run_uploads:
-    ldy #0
-    tyx
+    ldx UPLOAD_LIST         ; (in bank $41)
 @next:
-    lda f:UPLOADS, x
+    lda f:$410000, x
     beq @done
     cmp #UP_CGRAM
     beq @cgram
@@ -213,21 +212,21 @@ run_uploads:
     lda #$80
     sta VMAIN
     rep #$20
-    lda f:UPLOADS + 4, x
+    lda f:$410000 + 4, x
     sta VMADDL
     sep #$20
     lda #$01
     ldy #<VMDATAL
     bra @go
 @cgram:
-    lda f:UPLOADS + 4, x
+    lda f:$410000 + 4, x
     sta CGADD
     lda #$00
     ldy #<CGDATA
     bra @go
 @oam:
     rep #$20
-    lda f:UPLOADS + 4, x
+    lda f:$410000 + 4, x
     sta OAMADDL
     sep #$20
     lda #$00
@@ -237,12 +236,12 @@ run_uploads:
     tya
     sta BBAD(0)
     rep #$20
-    lda f:UPLOADS + 1, x
+    lda f:$410000 + 1, x
     sta A1T(0)
-    lda f:UPLOADS + 6, x
+    lda f:$410000 + 6, x
     sta DAS(0)
     sep #$20
-    lda f:UPLOADS + 3, x
+    lda f:$410000 + 3, x
     sta A1B(0)
     lda #1
     sta MDMAEN

@@ -158,11 +158,15 @@ static void ram_clear_keep(void)
 /* ROM checksum from $200 to the end, against the header ($6BF4). */
 static int rom_checksum_ok(void)
 {
+#ifdef SNES
+    return 1;                      /* the SNES build carries the ROM as is */
+#else
     uint32_t a, end = rd32(0x0001A4) + 1;
     uint16_t sum = 0;
     for (a = 0x200; a < end; a += 2)
         sum = (uint16_t)(sum + rd16(a));
     return sum == rd16(0x00018E);
+#endif
 }
 
 /* The game mode table ($6CF2) */

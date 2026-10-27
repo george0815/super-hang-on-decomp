@@ -2052,6 +2052,9 @@ static int build_sprite_table(void)
             uint16_t pieces, y0, x0, tile0, p;
             if (!rd16(obj + OBJ_SPRITE_MAP))
                 continue;
+#ifdef SNES
+            sprite_object_c(obj);   /* the object's frame as SNES OBJs */
+#endif
             map = sx16(rd16(obj + OBJ_SPRITE_MAP));
             pieces = rd16(map);
             map += 2;
@@ -2112,7 +2115,13 @@ void objects_update(void)
             m68k_fault("unknown object handler", index);
         handlers[index / 4 - 1](obj);
     }
+#ifdef SNES
+    sprites_begin_c();
+#endif
     objects_sprite_count = build_sprite_table();
+#ifdef SNES
+    sprites_end_c();
+#endif
     link_sprites(objects_sprite_count);
 }
 

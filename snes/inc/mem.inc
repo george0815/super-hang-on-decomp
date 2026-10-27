@@ -26,16 +26,17 @@ SHOWN_INIDISP = $003012 ; byte: the INIDISP in effect (set by the NMI)
 PAD_RAW      = $003014  ; word: the SNES pad as read in the last VBlank
 PALETTE_PENDING = $003016 ; byte: the VBlank took the palette: upload it
 SA1_IRQ_DP   = $3300    ; the SA-1 VBlank interrupt's own direct page
+PAD_HELD_MD  = $003018  ; byte: the pad as the Genesis's S A C B R L D U
+UPLOAD_LIST  = $00301A  ; word: the ready upload list (bank $41)
 
 ; The SA-1's direct page and stack are also in I-RAM
 SA1_DP       = $3100
 SA1_STACK    = $37FF
 
-; The upload list (BW-RAM): 8-byte entries, built by the SA-1 during a
-; frame and run by the S-CPU's NMI handler.
+; The upload lists (BW-RAM bank $41, UPLOAD_LIST says which is ready):
+; 8-byte entries, built by the SA-1 and run by the S-CPU's NMI handler.
 ;   +0 kind (UP_END, UP_VRAM, UP_CGRAM, UP_OAM), +1 source (24 bits),
 ;   +4 destination (VRAM word address, CGRAM colour), +6 length in bytes
-UPLOADS      = $41F000
 UP_END       = 0
 UP_VRAM      = 1
 UP_CGRAM     = 2

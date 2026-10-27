@@ -100,8 +100,17 @@ SNESCORE ?= tools/ext/snes9x/libretro/snes9x_libretro.so
 tools/snes/snesrun: tools/snes/snesrun.c
 	$(MAKE) -C tools/snes snesrun
 
-# The SNES port (snes/, docs/snes-port.md): build/snes/shangon.sfc
-SNES_OBJS := $(patsubst snes/%.s,build/snes/%.o,$(wildcard snes/*.s)) build/snes/assets.o
+# The SNES port (snes/, docs/snes-port.md): build/snes/shangon.sfc. The
+# game code is src/game compiled for the SA-1 (tools/snes/c816.py); snes/
+# holds the hand-written rest. CCODE1-4 are 64 KB code banks.
+SNES_C_BANK = race:CCODE1 objects:CCODE2 vblank:CCODE4
+# C functions the SNES does its own way (snes/rt.s)
+SNES_C_SKIP = nemesis_to_vdp,nemesis_to_ram
+SNES_TRACE ?=           # 1: compiled functions note their entry (debugging)
+SNES_PROFILE ?=         # 1: the VBlank interrupt samples the SA-1's address
+SNES_C_OBJS := $(patsubst src/game/%.c,build/snes/c/%.o,$(GAME))
+SNES_OBJS := $(patsubst snes/%.s,build/snes/%.o,$(wildcard snes/*.s)) build/snes/assets.o \
+             $(SNES_C_OBJS) build/snes/c/init.o
 SNES_INCS := $(wildcard snes/inc/*.inc) build/snes/gen/assets.inc
 
 snes: build/snes/shangon.sfc
@@ -113,7 +122,22 @@ build/snes/assets.o: build/snes/gen/assets.s
 	$(CA65) --cpu 65816 -I build/snes/gen --bin-include-dir build/snes/gen -o $@ $<
 
 build/snes/%.o: snes/%.s $(SNES_INCS)
+	$(CA65) --cpu 65816 -g -I snes -I build/snes $(if $(SNES_PROFILE),-D PROFILE) -o $@ $<
+
+build/snes/c/%.s: src/game/%.c src/game/game.h tools/snes/c816.py $(wildcard tools/snes/include/*.h)
+	@mkdir -p build/snes/c
+	$(PYTHON) tools/snes/c816.py $@ $(or $(patsubst $*:%,%,$(filter $*:%,$(SNES_C_BANK))),CCODE3) $< --skip $(SNES_C_SKIP) $(if $(SNES_TRACE),--trace)
+
+build/snes/c/%.o: build/snes/c/%.s $(SNES_INCS)
 	$(CA65) --cpu 65816 -g -I snes -I build/snes -o $@ $<
+
+# Calls every compiled file's initialiser of statics
+build/snes/c/init.s: $(patsubst src/game/%.c,build/snes/c/%.s,$(GAME))
+	@( echo '.p816'; echo '.export c_init'; \
+	   for f in $$(grep -h '^.export [a-z_]*__init$$' $^ | cut -d' ' -f2); do echo ".import $$f"; done; \
+	   echo '.segment "CODE2"'; echo 'c_init:'; \
+	   for f in $$(grep -h '^.export [a-z_]*__init$$' $^ | cut -d' ' -f2); do echo "    jsl $$f"; done; \
+	   echo '    rtl' ) > $@
 
 build/snes/shangon.sfc: $(SNES_OBJS) snes/shangon.cfg tools/snes/checksum.py
 	$(LD65) -C snes/shangon.cfg -m build/snes/shangon.map --dbgfile build/snes/shangon.dbg -o $@ $(SNES_OBJS)
