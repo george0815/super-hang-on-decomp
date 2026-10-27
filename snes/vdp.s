@@ -90,6 +90,9 @@ hline       = $9C
 gline       = $9E
 hsc         = $A0
 hofs        = $A2
+row_md      = $A4       ; convert_row: the name table's address,
+row_off     = $A6       ;  the entry's offset in it,
+row_left    = $A8       ;  entries left
 
 .segment "CODE"
 .a16
@@ -480,20 +483,21 @@ mark_tile:
 
 bit_masks: .byte $01, $02, $04, $08, $10, $20, $40, $80
 
-; The name table entry A at VRAM address X (>= PLANE_A), into the maps.
+; A name table entry was written at VRAM address X (>= PLANE_A): its map
+; row (plane A, the window plane, plane B) is to be converted again. That
+; happens at the flush, and only while the row is on screen (the race
+; keeps its sprite and scroll tables in plane A rows it never shows).
 map_word:
     stx z:map_off
-    jsr convert_entry
-    sta z:entry
-    lda z:map_off
+    txa
     cmp #PLANE_B
     bcs @plane_b
     sec
     sbc #PLANE_A
-    jsr map_index
-    lda z:entry
-    sta f:map_a, x
-    tyx
+    asl
+    xba
+    and #$003F              ; row = offset >> 7
+    tax
     sep #$20
     .a8
     lda #1
@@ -505,10 +509,10 @@ map_word:
     bcc @done
     sec
     sbc #WINDOW
-    jsr map_index
-    lda z:entry
-    sta f:map_w, x
-    tyx
+    asl
+    xba
+    and #$001F
+    tax
     sep #$20
     .a8
     lda #1
@@ -521,10 +525,10 @@ map_word:
 @plane_b:
     sec
     sbc #PLANE_B
-    jsr map_index
-    lda z:entry
-    sta f:map_b, x
-    tyx
+    asl
+    xba
+    and #$003F
+    tax
     sep #$20
     .a8
     lda #1
@@ -801,10 +805,10 @@ vdp_flush:
     cmp #MAX_SLOTS - 128
     bcc :+
     jsr reconvert
-:   jsr dirty_tiles
-    jsr upload_tiles
+:   jsr ppu_setup           ; (the rows on screen, for upload_rows)
     jsr upload_rows
-    jmp ppu_setup
+    jsr dirty_tiles
+    jmp upload_tiles
 
 ; Changed tiles with a slot join the pending list.
 dirty_tiles:
@@ -1015,6 +1019,7 @@ upload_rows:
 @row:
     tyx
     lda f:rows_a, x
+    and f:vis_a, x          ; changed, and on screen
     and #$00FF
     beq @next
     dec z:budget
@@ -1033,6 +1038,8 @@ upload_rows:
     cmp #64
     bcs :+
     sta z:t0
+    lda #PLANE_A
+    sta z:row_md
     lda #PLANE_A_MAP
     ldx #.loword(map_a)
     bra @queue
@@ -1040,17 +1047,22 @@ upload_rows:
     bcs :+
     sbc #64 - 1             ; (carry clear)
     sta z:t0
+    lda #PLANE_B
+    sta z:row_md
     lda #PLANE_B_MAP
     ldx #.loword(map_b)
     bra @queue
 :   sbc #128
     sta z:t0
+    lda #WINDOW
+    sta z:row_md
     lda #WINDOW_MAP
     ldx #.loword(map_w)
 @queue:
     sta z:up_dst
     stx z:up_src
     phy
+    jsr convert_row
     jsr queue_row
     ply
 @next:
@@ -1058,6 +1070,42 @@ upload_rows:
     cpy #ROWS_SIZE
     bcc @row
 @done:
+    rts
+
+; Convert row t0 of the name table at row_md into the map at up_src.
+convert_row:
+    lda z:t0
+    pha                     ; (map_index uses t0)
+    xba
+    lsr                     ; row * 128
+    sta z:row_off
+    lda #64
+    sta z:row_left
+@entry:
+    lda z:row_md
+    clc
+    adc z:row_off
+    tax
+    lda f:VRAM_MIRROR, x
+    xba
+    jsr convert_entry
+    sta z:entry
+    lda z:row_off
+    jsr map_index           ; (X = the byte offset in the map)
+    txa
+    clc
+    adc z:up_src
+    tax
+    lda z:entry
+    sta f:map_a & $FF0000, x
+    lda z:row_off
+    clc
+    adc #2
+    sta z:row_off
+    dec z:row_left
+    bne @entry
+    pla
+    sta z:t0
     rts
 
 ; Queue row t0 of the map at up_src (VRAM up_dst): its left and right
@@ -1173,6 +1221,13 @@ hdma_build:
 :   lda z:VDP_REGS + 11
     and #$0003
     sta z:hs_mode
+    ldx #0                  ; no rows on screen yet
+    lda #0
+:   sta f:vis_a, x
+    inx
+    inx
+    cpx #ROWS_SIZE
+    bcc :-
     ; headers: 112 and 113 lines, one entry each
     ldx z:hdma_cur
     sep #$20
@@ -1198,8 +1253,15 @@ hdma_build:
     ; BG1: the window, or plane A
     jsr in_window
     bcc @plane_a
+    lda z:gline             ; the window's row is on screen
+    lsr
+    lsr
+    lsr
+    tax
     sep #$20
     .a8
+    lda #1
+    sta f:vis_w, x
     lda #(WINDOW_MAP >> 10 << 2) | 1
     ldx z:hsc
     sta f:hdma_bufs, x
@@ -1229,6 +1291,7 @@ hdma_build:
     ldx z:hofs
     sta f:hdma_bufs, x
     jsr vscroll_a
+    jsr mark_a
     dec
     and #$03FF
     ldx z:hofs
@@ -1244,6 +1307,7 @@ hdma_build:
     ldx z:hofs
     sta f:hdma_bufs + OFS_SIZE, x
     jsr vscroll_b
+    jsr mark_b
     dec
     and #$03FF
     ldx z:hofs
@@ -1290,6 +1354,44 @@ hdma_build:
     .a16
     lda z:hdma_cur
     sta f:HDMA_TABLES
+    rts
+
+; Plane A's (B's) row shown on line gline with vertical scroll A, on
+; screen; A is kept.
+mark_a:
+    pha
+    clc
+    adc z:gline
+    and #$01F8
+    lsr
+    lsr
+    lsr
+    tax
+    sep #$20
+    .a8
+    lda #1
+    sta f:vis_a, x
+    rep #$20
+    .a16
+    pla
+    rts
+
+mark_b:
+    pha
+    clc
+    adc z:gline
+    and #$01F8
+    lsr
+    lsr
+    lsr
+    tax
+    sep #$20
+    .a8
+    lda #1
+    sta f:vis_b, x
+    rep #$20
+    .a16
+    pla
     rts
 
 ; Is Genesis line gline in the window? (carry)
@@ -1452,6 +1554,9 @@ tile_dirty:     .res 256 + 1        ; a bit per tile
 rows_a:         .res 64             ; a byte per map row: A, then B, window
 rows_b:         .res 64
 rows_w:         .res 32 + 1
+vis_a:          .res 64             ; rows on screen this frame, laid out as
+vis_b:          .res 64             ;  rows_a, rows_b, rows_w
+vis_w:          .res 32 + 1
 pending:        .res PENDING_SIZE
 tile_gen:       .res 2048           ; a count of each tile's changes
 tile_staging:   .res UPLOAD_TILES * 32

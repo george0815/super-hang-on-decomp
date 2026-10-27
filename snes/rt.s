@@ -20,7 +20,7 @@
 .export rt_divu16, rt_modu16, rt_divs32, rt_divu32, rt_mods32, rt_modu32
 .export rt_get_sr, rt_set_sr, rt_idle, rt_fault, rt_call_ptr
 .export rt_vdp_data16, rt_vdp_data32, rt_vdp_ctrl16, rt_vdp_ctrl32
-.export trace_ring, trace_pos
+.export trace_ring, trace_pos, pad_frames, pad_last
 .export nemesis_to_vdp, nemesis_to_ram, memset, f_divs, f_divu, set_dn, f_logic
 .export sprites_begin_c, sprite_object_c, sprites_end_c, sprites_hide_c
 .import vdp_ctrl_write, vdp_data_write, vdp_data_read, vdp_status, vdp_tiles
@@ -200,7 +200,11 @@ hw_read:
 ; The first pad's port as the Genesis reads it: TH high gives C B R L D U,
 ; TH low Start and A (active low; the pad is the SNES's, sa1.s maps it).
 pad_read:
+.ifdef PADTABLE
+    jsr pad_from_table
+.else
     lda f:PAD_HELD_MD       ; S A C B R L D U, 1 = down
+.endif
     and #$00FF
     sta r_t1
     lda f:pad_th
@@ -221,6 +225,34 @@ pad_read:
     ora r_t3
     eor #$003F
     rts
+
+.ifdef PADTABLE
+; (Test builds) the pad of a recording, by game frame: the main loop's
+; count at $FFC726, carried past 255 here, indexes the table built from
+; the native port's pad log (tools/snes/padtable.py).
+.import pad_table, pad_table_end
+pad_from_table:
+    lda a:$C726
+    and #$00FF
+    sec
+    sbc f:pad_last
+    and #$00FF
+    clc
+    adc f:pad_frames
+    sta f:pad_frames
+    lda a:$C726
+    and #$00FF
+    sta f:pad_last
+    lda f:pad_frames
+    cmp #.loword(pad_table_end - pad_table)
+    bcs @none
+    tax
+    lda f:pad_table, x
+    rts
+@none:
+    lda #0
+    rts
+.endif
 
 ; Write 8 bits (A) at CT1:CT0.
 rt_write8:
@@ -1042,4 +1074,6 @@ trace_ring:     .res $400       ; (c816.py --trace) the last functions entered
 trace_pos:      .res 2
 z80_mailbox:    .res $400       ; Z80 RAM $1C00-$1FFF: the sound driver's mailbox
 pad_th:         .res 1
+pad_frames:     .res 2          ; (PADTABLE) game frames so far,
+pad_last:       .res 2          ;  and $FFC726 when last read
 pad_ctrl:       .res 2

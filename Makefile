@@ -3,7 +3,7 @@ SHA1    := ecfd7b3bf4dcbee472ddf2f9cdbe968a05b814e0
 PYTHON  ?= python3
 VASM    ?= tools/bin/vasmm68k_mot
 
-.PHONY: all check disasm report rom recomp fntest replay verify sndtest port snes snes-shots snes-snap clean
+.PHONY: all check disasm report rom recomp fntest replay verify sndtest port snes snes-shots snes-snap clean FORCE
 
 all: disasm
 
@@ -108,21 +108,32 @@ SNES_C_BANK = race:CCODE1 objects:CCODE2 vblank:CCODE4
 SNES_C_SKIP = nemesis_to_vdp,nemesis_to_ram,scroll_tables,road_rows,race_build_road
 SNES_TRACE ?=           # 1: compiled functions note their entry (debugging)
 SNES_PROFILE ?=         # 1: the VBlank interrupt samples the SA-1's address
+SNES_PADLOG ?=          # a livetest SHO_PADLOG: the build plays that input
 SNES_C_OBJS := $(patsubst src/game/%.c,build/snes/c/%.o,$(GAME))
 SNES_OBJS := $(patsubst snes/%.s,build/snes/%.o,$(wildcard snes/*.s)) build/snes/assets.o \
-             $(SNES_C_OBJS) build/snes/c/init.o
-SNES_INCS := $(wildcard snes/inc/*.inc) build/snes/gen/assets.inc
+             $(SNES_C_OBJS) build/snes/c/init.o $(if $(SNES_PADLOG),build/snes/padtable.o)
+SNES_INCS := $(wildcard snes/inc/*.inc) build/snes/gen/assets.inc build/snes/flags
+SNES_ASFLAGS := $(if $(SNES_PROFILE),-D PROFILE) $(if $(SNES_PADLOG),-D PADTABLE)
 
 snes: build/snes/shangon.sfc
 
 build/snes/gen/assets.s build/snes/gen/assets.inc &: tools/snes/assets.py tools/snes/nemesis.py $(GAME) | check
 	$(PYTHON) tools/snes/assets.py $(ROM) build/snes/gen
 
+# (rewritten only when the options change, so changing them rebuilds the asm)
+build/snes/flags: FORCE
+	@mkdir -p build/snes
+	@echo '$(SNES_ASFLAGS)' | cmp -s - $@ || echo '$(SNES_ASFLAGS)' > $@
+
+build/snes/padtable.o: $(SNES_PADLOG) tools/snes/padtable.py
+	$(PYTHON) tools/snes/padtable.py $(SNES_PADLOG) build/snes/gen/padtable.s
+	$(CA65) --cpu 65816 -o $@ build/snes/gen/padtable.s
+
 build/snes/assets.o: build/snes/gen/assets.s
 	$(CA65) --cpu 65816 -I build/snes/gen --bin-include-dir build/snes/gen -o $@ $<
 
 build/snes/%.o: snes/%.s $(SNES_INCS)
-	$(CA65) --cpu 65816 -g -I snes -I build/snes $(if $(SNES_PROFILE),-D PROFILE) -o $@ $<
+	$(CA65) --cpu 65816 -g -I snes -I build/snes $(SNES_ASFLAGS) -o $@ $<
 
 build/snes/c/%.s: src/game/%.c src/game/game.h tools/snes/c816.py $(wildcard tools/snes/include/*.h)
 	@mkdir -p build/snes/c
@@ -169,3 +180,5 @@ report: check
 
 clean:
 	rm -rf build
+
+FORCE:

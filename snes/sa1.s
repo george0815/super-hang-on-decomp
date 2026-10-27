@@ -14,7 +14,7 @@
 .include "inc/macros.inc"
 
 .export sa1_reset, sa1_irq, upload, upload_vram, upload_fits, upload_handover
-.import vdp_reset, sprites_reset, c_init
+.import vdp_reset, sprites_reset, c_init, pad_frames, pad_last
 .import reset, vblank_menu, vblank_race
 
 UPLOAD_A = $E000        ; the two upload lists (bank $41)
@@ -62,6 +62,9 @@ sa1_reset:
     sta z:up_list
     lda #UPLOAD_BUDGET
     sta z:up_budget
+    lda #0
+    sta f:pad_frames
+    sta f:pad_last
     jsr vdp_reset
     jsr sprites_reset
     jsl c_init              ; the C's initialised statics
