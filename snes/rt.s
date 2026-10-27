@@ -22,7 +22,7 @@
 .export rt_vdp_data16, rt_vdp_data32, rt_vdp_ctrl16, rt_vdp_ctrl32
 .export trace_ring, trace_pos, pad_frames, pad_last
 .export nemesis_to_vdp, nemesis_to_ram, memset, f_divs, f_divu, set_dn, f_logic
-.export sprites_begin_c, sprite_object_c, sprites_end_c, sprites_hide_c
+.export sprites_begin_c, sprite_object_c, sprites_end_c, sprites_hide_c, vdp_flush_c, frame_sync_c
 .import vdp_ctrl_write, vdp_data_write, vdp_data_read, vdp_status, vdp_tiles
 .import vdp_flush, upload_handover
 .import sprites_begin, sprite_object, sprites_end, sprites_hide
@@ -840,17 +840,7 @@ rt_set_sr:
 ; Let time pass in a wait loop: hand this frame's uploads to the next
 ; VBlank if the last ones are gone, then wait for an interrupt.
 rt_idle:
-    sep #$20
-    .a8
-    lda f:UPLOAD_READY
-    rep #$20
-    .a16
-    bne @wait
-    lda z:vdp_on
-    beq :+
-    jsr vdp_flush
-:   jsr upload_handover
-@wait:
+    jsr flush
     php                     ; (with interrupts off nothing would come)
     sep #$20
     .a8
@@ -861,6 +851,42 @@ rt_idle:
     bne :+
     wai
 :   rtl
+
+; A game frame ends (system.c). In test builds, snesrun -F dumps the
+; Genesis RAM now: wait for it, with the VBlank's work held back.
+frame_sync_c:
+.ifdef PADTABLE
+    php
+    sei
+    sep #$20
+    .a8
+    lda #1
+    sta f:SYNC_FLAG
+:   lda f:SYNC_FLAG
+    bne :-
+    plp
+.endif
+    rtl
+
+; The VDP's changes so far to the next VBlank, if the last ones are gone
+; (system.c, when a frame goes on without waiting).
+vdp_flush_c:
+    jsr flush
+    rtl
+
+flush:
+    sep #$20
+    .a8
+    lda f:UPLOAD_READY
+    rep #$20
+    .a16
+    bne @done
+    lda z:vdp_on
+    beq :+
+    jsr vdp_flush
+:   jsr upload_handover
+@done:
+    rts
 
 ; A fault the original would also stop at.
 rt_fault:

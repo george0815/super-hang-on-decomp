@@ -4,6 +4,8 @@
  *
  * usage: livetest ROM FRAMES INPUT.txt OUTDIR [FRAME]...
  * SHO_MIX=master,music,engine,effects (percent) overrides the sound mix.
+ * SHO_FRAMEDUMP=DIR saves the RAM as each game frame ends, to DIR/f_N.ram
+ * for the Nth (to compare with the SNES build's, snesrun -F).
  * SHO_PADLOG=FILE lists the pad as the game reads it, one line per read:
  * the game frame (the main loop's count, $FFC726, carried past 255) and
  * the pad (hex, S A C B R L D U), for driving the SNES build (snesrun -P).
@@ -64,6 +66,20 @@ static void load_script(const char *path)
 }
 
 static FILE *padlog;
+static const char *framedump;
+
+static void frame_end(void)
+{
+    static int n;
+    char path[512];
+    FILE *f;
+    snprintf(path, sizeof path, "%s/f_%d.ram", framedump, n++);
+    f = fopen(path, "wb");
+    if (f) {
+        fwrite(m68k_ram, 1, 0x10000, f);
+        fclose(f);
+    }
+}
 
 uint16_t host_pad(int port)
 {
@@ -181,6 +197,10 @@ int main(int argc, char **argv)
         snprintf(path, sizeof path, "%s/live.ymlog", outdir);
         ymlog = fopen(path, "w");
         if (ymlog) sound_write_hook = log_ym;
+    }
+    if (getenv("SHO_FRAMEDUMP")) {
+        framedump = getenv("SHO_FRAMEDUMP");
+        frame_end_hook = frame_end;
     }
     if (getenv("SHO_PADLOG"))
         padlog = fopen(getenv("SHO_PADLOG"), "w");

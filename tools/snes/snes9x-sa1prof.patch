@@ -1,16 +1,17 @@
 --- a/sa1cpu.cpp
 +++ b/sa1cpu.cpp
-@@ -57,6 +57,45 @@
+@@ -57,6 +57,47 @@
  static void S9xSA1UpdateTimer (void);
  
  
 +// SA-1 profiling (super-hang-on-decomp): with SA1PROF=file, the SA-1's
-+// cycles per instruction address between frames SA1PROF_FROM and
-+// SA1PROF_TO, written to file at exit as (address, cycles) uint32 pairs.
++// cycles and executions per instruction address between frames
++// SA1PROF_FROM and SA1PROF_TO, written to file at exit as (address,
++// cycles, count) uint32 triples.
 +#include <stdio.h>
 +#include <stdlib.h>
 +#include "ppu.h"
-+static uint32 *sa1prof;
++static uint32 *sa1prof, *sa1prof_n;
 +static int sa1prof_state;		// 0 not yet looked, 1 on, 2 off
 +static uint32 sa1prof_from, sa1prof_to;
 +
@@ -22,7 +23,7 @@
 +	for (uint32 a = 0; a < 0x1000000; a++)
 +		if (sa1prof[a])
 +		{
-+			uint32 rec[2] = { a, sa1prof[a] };
++			uint32 rec[3] = { a, sa1prof[a], sa1prof_n[a] };
 +			fwrite(rec, sizeof rec, 1, f);
 +		}
 +	fclose(f);
@@ -35,7 +36,8 @@
 +	if (!f || !*f)
 +		return;
 +	sa1prof = (uint32 *) calloc(0x1000000, sizeof(uint32));
-+	if (!sa1prof)
++	sa1prof_n = (uint32 *) calloc(0x1000000, sizeof(uint32));
++	if (!sa1prof || !sa1prof_n)
 +		return;
 +	sa1prof_from = getenv("SA1PROF_FROM") ? atoi(getenv("SA1PROF_FROM")) : 0;
 +	sa1prof_to = getenv("SA1PROF_TO") ? atoi(getenv("SA1PROF_TO")) : 0xFFFFFFFF;
@@ -46,7 +48,7 @@
  void S9xSA1MainLoop (void)
  {
  	if (Memory.FillRAM[0x2200] & 0x60)
-@@ -139,6 +178,8 @@
+@@ -139,6 +180,8 @@
  
  		uint8				Op;
  		struct SOpcodes	*Opcodes;
@@ -55,7 +57,7 @@
  
  		if (SA1.PCBase)
  		{
-@@ -162,6 +203,11 @@
+@@ -162,6 +205,14 @@
  
  		Registers.PCw++;
  		(*Opcodes[Op].S9xOpcode)();
@@ -63,7 +65,10 @@
 +		if (sa1prof_state == 0)
 +			sa1prof_init();
 +		if (sa1prof_state == 1 && IPPU.TotalEmulatedFrames >= sa1prof_from && IPPU.TotalEmulatedFrames < sa1prof_to)
++		{
 +			sa1prof[profPC & 0xFFFFFF] += SA1.Cycles - profCycles;
++			sa1prof_n[profPC & 0xFFFFFF]++;
++		}
  	}
  
  	S9xSA1UpdateTimer();

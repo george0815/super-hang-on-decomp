@@ -46,6 +46,8 @@ extern uint64_t m68k_icount, m68k_icount_event;
 extern int64_t m68k_cycles, m68k_cycles_event;
 void m68k_event(uint32_t pc);
 void m68k_idle(uint32_t pc);   /* let time pass to the next event */
+/* called as each game frame ends (system.c wait_frame_ticks), for tests */
+extern void (*frame_end_hook)(void);
 
 #define HOOK(pc, cyc) do { \
         if (m68k_icount == m68k_icount_event || m68k_cycles >= m68k_cycles_event) \

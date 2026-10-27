@@ -25,7 +25,9 @@ PROFILE_SIZE = $400     ; the last 256 VBlanks: dump BW-RAM every 256 frames
 profile_pos: .res 2
 profile_ring: .res PROFILE_SIZE
 .endif
+.ifdef DEBUG
 iram_copy: .res $200    ; I-RAM $3000-$31FF, each VBlank (dumps can't see I-RAM)
+.endif
 UPLOAD_B = $F000
 
 .segment "CODE"
@@ -127,12 +129,14 @@ sa1_irq:
     rep #$20
     .a16
     jsr pad_convert
-    ldx #$1FE               ; (for debugging: I-RAM where dumps can see it)
+.ifdef DEBUG
+    ldx #$1FE               ; (I-RAM where dumps can see it)
 :   lda f:$003000, x
     sta f:iram_copy, x
     dex
     dex
     bpl :-
+.endif
     ldw VBLANK_HANDLER
     cmp #4
     bne :+

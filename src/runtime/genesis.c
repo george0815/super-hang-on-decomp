@@ -263,6 +263,8 @@ void m68k_event(uint32_t pc)
  * interrupt, live play the cycle count to the next scanline. pc is the
  * original's address for the stacked return of an interrupt.
  */
+void (*frame_end_hook)(void);
+
 void m68k_idle(uint32_t pc)
 {
     if (gen_replay) {

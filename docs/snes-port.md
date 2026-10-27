@@ -70,12 +70,15 @@ Debug builds:
 - `make snes SNES_TRACE=1` records each compiled function's entry in a
   ring buffer.
 - `SNES_PROFILE=1` samples the SA-1's address at every VBlank.
+- `SNES_DEBUG=1` copies I-RAM ($3000-$31FF) to BW-RAM at every VBlank, where
+  dumps can see it.
 - For exact profiles, `tools/snes/snes9x-sa1prof.patch` adds a profiler
   to the snes9x core (apply it in `tools/ext/snes9x`, then rebuild with
   `make -C tools/ext/snes9x/libretro`). With `SA1PROF=file` set (and
   optionally `SA1PROF_FROM`/`SA1PROF_TO`, a range of video frames), the
-  core counts the SA-1's cycles per instruction address and writes them
-  at exit. `tools/snes/sa1prof.py file` sums them per function.
+  core counts the SA-1's cycles and executions per instruction address
+  and writes them at exit. `tools/snes/sa1prof.py file` sums them per
+  function, with each function's calls and cycles per call.
 
 ## Checking the port
 
@@ -98,10 +101,24 @@ frames, and the SNES takes more video frames per game frame. So a test
 build plays a recording by game frame instead:
 `make snes SNES_PADLOG=file` builds in a table of the pad the game read in
 each game frame, taken from a native-port pad log (livetest with
-`SHO_PADLOG=file`). With it, every complete race frame of
-`tests/inputs/race.txt` matches the Genesis's RAM at the end of the frame,
-apart from the bytes that depend on how many VBlanks a frame takes (the
-VBlank's DMA stream at $FFC7CC).
+`SHO_PADLOG=file`).
+
+**Frame-end dumps.** Both sides can save the RAM as each game frame ends
+(`wait_frame_ticks`): livetest with `SHO_FRAMEDUMP=dir` writes
+`dir/f_N.ram`, and a `SNES_PADLOG` build run by `make snes-shots
+FRAMEDUMP=1` (snesrun `-F`) writes `build/snes/shot_fN.ram`. The SNES build
+sets a flag at $41DFF0 there and waits until snesrun has dumped bank $40.
+The Nth dumps pair up exactly. Over `tests/inputs/race.txt` (752 game
+frames) and `attract.txt` (507), they match except for bytes that depend
+on where the VBlanks fall in the frame:
+- the tile update counts at $FF094A (the VBlank clears them);
+- the HUD's digit scratch at $FF0582;
+- the DMA bookkeeping at $FFC706-$FFC70D and $FFC7EA;
+- the VBlank counters.
+
+When a SNES frame outlasts its ticks, `wait_frame_ticks` starts the next
+one at once, handing the VDP's changes to the next VBlank
+(`vdp_flush_c`). The original would be waiting for that VBlank.
 
 **Interrupt safety.** The VBlank interrupt runs compiled C and parts of
 the VDP layer. It saves the compiled code's temporaries ($E0-$FF) and the

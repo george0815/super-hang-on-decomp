@@ -30,6 +30,10 @@ PAD_HELD_MD  = $003018  ; byte: the pad as the Genesis's S A C B R L D U
 UPLOAD_LIST  = $00301A  ; word: the ready upload list (bank $41)
 HDMA_TABLES  = $00301C  ; word: the HDMA tables to show (vdp.s, bank $41)
 
+; Test builds (PADTABLE): set as a game frame ends; snesrun -F dumps the
+; Genesis RAM and clears it (shangon.cfg keeps the BWRAM segment below)
+SYNC_FLAG    = $41DFF0
+
 ; The SA-1's direct page and stack are also in I-RAM
 SA1_DP       = $3100
 SA1_STACK    = $37FF

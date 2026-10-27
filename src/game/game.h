@@ -155,6 +155,10 @@ void sprites_begin_c(void);
 void sprite_object_c(uint32_t obj);
 void sprites_end_c(void);
 void sprites_hide_c(void);
+/* hand the VDP's changes to the next VBlank, if the last ones are gone */
+void vdp_flush_c(void);
+/* (test builds) wait for snesrun to dump the RAM as a game frame ends */
+void frame_sync_c(void);
 #endif
 void race_objects_setup(void);
 

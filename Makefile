@@ -109,11 +109,12 @@ SNES_C_SKIP = nemesis_to_vdp,nemesis_to_ram,scroll_tables,road_rows,race_build_r
 SNES_TRACE ?=           # 1: compiled functions note their entry (debugging)
 SNES_PROFILE ?=         # 1: the VBlank interrupt samples the SA-1's address
 SNES_PADLOG ?=          # a livetest SHO_PADLOG: the build plays that input
+SNES_DEBUG ?=           # 1: the VBlank copies I-RAM to BW-RAM (iram_copy)
 SNES_C_OBJS := $(patsubst src/game/%.c,build/snes/c/%.o,$(GAME))
 SNES_OBJS := $(patsubst snes/%.s,build/snes/%.o,$(wildcard snes/*.s)) build/snes/assets.o \
              $(SNES_C_OBJS) build/snes/c/init.o $(if $(SNES_PADLOG),build/snes/padtable.o)
 SNES_INCS := $(wildcard snes/inc/*.inc) build/snes/gen/assets.inc build/snes/flags
-SNES_ASFLAGS := $(if $(SNES_PROFILE),-D PROFILE) $(if $(SNES_PADLOG),-D PADTABLE)
+SNES_ASFLAGS := $(if $(SNES_PROFILE),-D PROFILE) $(if $(SNES_PADLOG),-D PADTABLE) $(if $(SNES_DEBUG),-D DEBUG)
 
 snes: build/snes/shangon.sfc
 
@@ -160,9 +161,10 @@ FRAMES ?= 400
 SHOTS  ?= 100 200 300
 BWSHOTS ?=
 PADLOG ?=               # drive the pad by the game's reads (livetest SHO_PADLOG)
+FRAMEDUMP ?=            # 1 (with SNES_PADLOG builds): build/snes/shot_fN.ram as game frame N ends
 INPUT  ?= tests/inputs/attract.txt
 snes-shots: build/snes/shangon.sfc tools/snes/snesrun
-	tools/snes/snesrun $(SNESCORE) $< $(FRAMES) -i $(INPUT) $(foreach f,$(SHOTS),-s $(f)) $(foreach f,$(BWSHOTS),-B $(f)) $(if $(PADLOG),-P $(PADLOG)) -o build/snes/shot -w build/snes/wram.bin -b build/snes/bwram.bin -v build/snes/vram.bin
+	tools/snes/snesrun $(SNESCORE) $< $(FRAMES) -i $(INPUT) $(foreach f,$(SHOTS),-s $(f)) $(foreach f,$(BWSHOTS),-B $(f)) $(if $(PADLOG),-P $(PADLOG)) $(if $(FRAMEDUMP),-F) -o build/snes/shot -w build/snes/wram.bin -b build/snes/bwram.bin -v build/snes/vram.bin
 
 # A Genesis screen on the SNES: SNAP is a .vdp snapshot from livetest
 # (build/livetest ROM FRAMES INPUT OUTDIR FRAME); writes SNAPDIR/snap.sfc

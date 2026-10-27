@@ -124,6 +124,22 @@ void wait_vblank_68k(void)
    8, and restart it ($6D5E). */
 void wait_frame_ticks(void)
 {
+#ifdef SNES
+    frame_sync_c();
+#else
+    if (frame_end_hook)
+        frame_end_hook();
+#endif
+#ifdef SNES
+    /* The SNES's frames often take longer than the ticks: then the next
+       frame starts at once (the original's would be waiting for this
+       VBlank), with the frame's VDP changes handed over. */
+    if ((int16_t)rd16(FRAME_TICKS) >= 8) {
+        vdp_flush_c();
+        wr16(FRAME_TICKS, 0);
+        return;
+    }
+#endif
     do
         wait_vblank();
     while ((int16_t)rd16(FRAME_TICKS) < 8);

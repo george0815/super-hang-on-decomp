@@ -759,8 +759,8 @@ class Compiler:
             self.emit('cmp #$00FF')
             self.emit('bne %s' % rom)
             self.emit('lda %s' % self.var_word(var, False))
-            self.emit('tax')
-            self.read_at(size, 'a:$%04X, x' % (c & 0xFFFF), 'a:$%04X, x' % ((c + 2) & 0xFFFF), need)
+            self.index_at(c)
+            self.read_at(size, *self.indexed(c), need)
             self.emit('bra %s' % done)
             self.label(rom)             # ROM: through CPTR
             self.emit('cmp #$0040')
@@ -887,10 +887,10 @@ class Compiler:
             self.emit('cmp #$00FF')
             self.emit('bne %s' % lab_slow)
             self.emit('lda %s' % self.var_word(var, False))
-            self.emit('tax')
+            self.index_at(c)
             self.emit('pla')
             self.depth -= 2
-            self.write_at(size, 'a:$%04X, x' % (c & 0xFFFF), 'a:$%04X, x' % ((c + 2) & 0xFFFF))
+            self.write_at(size, *self.indexed(c))
             self.emit('bra %s' % lab_done)
             self.label(lab_slow)
             self.depth += 2             # (the value is still on the stack)
@@ -925,6 +925,20 @@ class Compiler:
         self.label(lab_slow)
         self.emit('jsl rt_write%d' % size)
         self.label(lab_done)
+
+    # A RAM pointer in A plus a constant offset c, to X. Indexed absolute
+    # addressing carries into the next bank, so a negative offset ($FFFC, x)
+    # is added first.
+    def index_at(self, c):
+        if (c & 0xFFFF) >= 0x8000:
+            self.emit('clc')
+            self.emit('adc #$%04X' % (c & 0xFFFF))
+        self.emit('tax')
+
+    def indexed(self, c):
+        if (c & 0xFFFF) >= 0x8000:
+            c = 0
+        return 'a:$%04X, x' % (c & 0xFFFF), 'a:$%04X, x' % ((c + 2) & 0xFFFF)
 
     def write_at(self, size, op, op_hi):
         if size == 8:
