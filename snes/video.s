@@ -40,6 +40,7 @@ UNPACK_MAP        = $EB00
 ; plane A empty, the window over the whole screen filled with $E000
 ; ($8380 and on; with interrupts masked in the original).
 screen_reset:
+    sei                     ; (the original masks interrupts)
     sep #$20
     .a8
     lda a:VDP_MODE_SHADOW + 3

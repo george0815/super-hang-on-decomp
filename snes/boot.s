@@ -8,11 +8,9 @@
 .include "inc/hw.inc"
 .include "inc/mem.inc"
 
-.import sa1_reset
+.import sa1_reset, sa1_irq
 
 .segment "ZEROPAGE"
-joy:        .res 2
-pad:        .res 1
 nmi_busy:   .res 1
 
 .segment "CODE"
@@ -68,6 +66,8 @@ reset:
     rep #$20
     lda #.loword(sa1_reset)
     sta CRV
+    lda #.loword(sa1_irq)
+    sta CIV
     sep #$20
     stz CCNT
 
@@ -176,16 +176,19 @@ nmi:
     jsr apply_shadows
     stz UPLOAD_READY
 @no_uploads:
-    jsr read_pad
+    ; the pad for the SA-1's VBlank interrupt, which plays the Genesis's
+    ; VBlank handler (sa1.s)
+:   lda HVBJOY
+    lsr
+    bcs :-                  ; the automatic read is still running
     rep #$20
     .a16
-    lda f:MIRROR + VBLANK_COUNT ; (big-endian)
-    xba
-    inc
-    xba
-    sta f:MIRROR + VBLANK_COUNT
+    lda JOY1L
+    sta PAD_RAW
     sep #$20
     .a8
+    lda #$80
+    sta CCNT
     stz nmi_busy
 @return:
     rep #$30
@@ -286,62 +289,6 @@ apply_shadows:
     sta INIDISP
     sta SHOWN_INIDISP
     rts
-
-; The pad as the Genesis's: held buttons S A C B R L D U, and the newly
-; pressed ones. SNES Y, B and A stand for the Genesis's A, B and C.
-read_pad:
-:   lda HVBJOY
-    lsr
-    bcs :-                  ; the automatic read is still running
-    rep #$20
-    .a16
-    lda JOY1L
-    sta joy
-    sep #$20
-    .a8
-    stz pad
-    ldx #0
-@button:
-    rep #$20
-    .a16
-    lda pad_map, x
-    and joy
-    sep #$20
-    .a8
-    beq :+
-    lda pad_map + 2, x
-    tsb pad
-:   inx
-    inx
-    inx
-    cpx #8 * 3
-    bne @button
-    lda f:MIRROR + PAD1_HELD
-    eor pad                 ; changed
-    and pad                 ; and down now
-    sta f:MIRROR + PAD1_PRESSED
-    lda pad
-    sta f:MIRROR + PAD1_HELD
-    rts
-
-; SNES button, Genesis button
-pad_map:
-    .word $0800
-    .byte $01               ; up
-    .word $0400
-    .byte $02               ; down
-    .word $0200
-    .byte $04               ; left
-    .word $0100
-    .byte $08               ; right
-    .word $8000
-    .byte $10               ; B: B
-    .word $0080
-    .byte $20               ; A: C
-    .word $4000
-    .byte $40               ; Y: A
-    .word $1000
-    .byte $80               ; Start
 
 irq:
     rti

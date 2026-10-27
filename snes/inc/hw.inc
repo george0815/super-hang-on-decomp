@@ -53,6 +53,8 @@ SIWP     = $2229        ; S-CPU I-RAM write enable
 ; SA-1, written by the SA-1
 CBWE     = $2227        ; SA-1 BW-RAM write enable
 CIWP     = $222A        ; SA-1 I-RAM write enable
+CIE      = $220A        ; SA-1 interrupt enable
+CIC      = $220B        ; SA-1 interrupt clear
 MCNT     = $2250        ; arithmetic: 0 multiply, 1 divide
 MA       = $2251
 MB       = $2253

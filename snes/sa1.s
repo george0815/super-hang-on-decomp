@@ -13,7 +13,7 @@
 .include "inc/dp.inc"
 .include "inc/macros.inc"
 
-.export sa1_reset, wait_vblank, upload, upload_vram, upload_flush, palette_upload
+.export sa1_reset, sa1_irq, wait_vblank, upload, upload_vram, upload_flush, palette_upload
 .export upload_fits
 .export mode_first_call, mode_setup_done
 .import logo_mode, title_mode, course_select_mode, music_select_mode, vdp_flush, vdp_pending, vdp_reset, display_on
@@ -45,6 +45,8 @@ sa1_reset:
     sta CBWE
     lda #$FF
     sta CIWP
+    lda #$80
+    sta CIE                 ; the VBlank interrupt from the S-CPU
     lda #^MIRROR
     pha
     plb
@@ -60,6 +62,7 @@ sa1_reset:
     stz up_pos
     stz z:vdp_on
     jsr sprites_reset
+    cli
 
 main_loop:
     sep #$20
@@ -106,6 +109,7 @@ mode_first_call:
 ; then after the next one the display on. Modes that use the VDP layer
 ; also wait for its uploads, so the screen appears complete.
 mode_setup_done:
+    cli
     stw VBLANK_HANDLER
     jsr wait_vblank
     lda z:vdp_on
@@ -118,22 +122,24 @@ mode_setup_done:
     .a16
     rts
 :   jsr vdp_pending
-    beq :+
-    jsr wait_vblank
-    bra :-
+    bne :+
+    lda f:PALETTE_PENDING
+    and #$00FF
+    beq :++
+:   jsr wait_vblank
+    bra :--
 :   jmp display_on
 
 ; Wait for the next VBlank ($6D4E). The frame's uploads go out in it: the
-; palette if marked, and the list, which the S-CPU's NMI runs before it
-; counts the VBlank.
+; palette if the last VBlank took it, the VDP layer's changes and the
+; list, which the S-CPU's NMI runs before the VBlank interrupt counts it.
 wait_vblank:
     sep #$20
     .a8
-    lda a:PALETTE_DIRTY
-    lsr
-    bcc :+
-    asl
-    sta a:PALETTE_DIRTY
+    lda f:PALETTE_PENDING
+    beq :+
+    lda #0
+    sta f:PALETTE_PENDING
     rep #$20
     .a16
     jsr palette_upload
@@ -300,6 +306,125 @@ level:
     lsr
     ora z:channel2
     rts
+
+; --------------------------------------------------------------- VBlank
+
+; The Genesis's VBlank interrupt ($6D2A), raised by the S-CPU after its
+; NMI work: the handler the mode picked, then the VBlank counted. It has
+; a direct page of its own and touches only the Genesis RAM and I-RAM.
+; The game masks it (sei) where the original masks interrupts.
+VBLANK_DP_JOY = $00
+VBLANK_DP_PAD = $02
+
+sa1_irq:
+    rep #$30
+    pha
+    phx
+    phy
+    phb
+    phd
+    lda #SA1_IRQ_DP
+    tcd
+    sep #$20
+    .a8
+    lda #$80
+    sta f:CIC               ; (long: the data bank is still the game's)
+    lda #^MIRROR
+    pha
+    plb
+    rep #$20
+    .a16
+    ldw VBLANK_HANDLER
+    cmp #4
+    bne :+
+    jsr vblank_menu
+:   ldw VBLANK_COUNT
+    inc
+    stw VBLANK_COUNT
+    rep #$30
+    pld
+    plb
+    ply
+    plx
+    pla
+    rti
+
+; The menus' VBlank ($7486): the sprite table, the palette if marked, the
+; pads. (The uploads themselves are the main loop's; this keeps the RAM
+; as the original leaves it.)
+vblank_menu:
+    lda #$0048              ; DMA command $48000083: the sprite table
+    sta a:$C70A
+    lda #$8300
+    sta a:$C70C
+    sep #$20
+    .a8
+    lda a:PALETTE_DIRTY
+    lsr
+    bcc :+
+    asl
+    sta a:PALETTE_DIRTY
+    lda #1
+    sta f:PALETTE_PENDING
+    rep #$20
+    .a16
+    lda #$00C0              ; $C0000080: CRAM
+    sta a:$C70A
+    lda #$8000
+    sta a:$C70C
+:   rep #$20
+    .a16
+    ; fall through
+
+; The pad as the Genesis's: held buttons S A C B R L D U, and the newly
+; pressed ones ($8196). SNES Y, B and A stand for the Genesis's A, B and C.
+read_pad:
+    lda f:PAD_RAW
+    sta z:VBLANK_DP_JOY
+    stz z:VBLANK_DP_PAD
+    ldx #0
+@button:
+    lda f:pad_map, x
+    and z:VBLANK_DP_JOY
+    beq :+
+    lda f:pad_map + 2, x
+    and #$00FF
+    tsb z:VBLANK_DP_PAD
+:   inx
+    inx
+    inx
+    cpx #8 * 3
+    bne @button
+    sep #$20
+    .a8
+    lda a:PAD1_HELD
+    eor z:VBLANK_DP_PAD     ; changed
+    and z:VBLANK_DP_PAD     ; and down now
+    sta a:PAD1_PRESSED
+    lda z:VBLANK_DP_PAD
+    sta a:PAD1_HELD
+    rep #$20
+    .a16
+    rts
+
+; SNES button, Genesis button
+pad_map:
+    .word $0800
+    .byte $01               ; up
+    .word $0400
+    .byte $02               ; down
+    .word $0200
+    .byte $04               ; left
+    .word $0100
+    .byte $08               ; right
+    .word $8000
+    .byte $10               ; B: B
+    .word $0080
+    .byte $20               ; A: C
+    .word $4000
+    .byte $40               ; Y: A
+    .word $1000
+    .byte $80               ; Start
 
 .segment "BWRAM"
 cgram_buffer: .res 128

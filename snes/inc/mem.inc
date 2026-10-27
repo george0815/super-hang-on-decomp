@@ -23,6 +23,9 @@ SH_BG2HOFS   = PPU_SHADOW + 12
 SH_BG2VOFS   = PPU_SHADOW + 14
 PPU_SHADOW_END = PPU_SHADOW + 16
 SHOWN_INIDISP = $003012 ; byte: the INIDISP in effect (set by the NMI)
+PAD_RAW      = $003014  ; word: the SNES pad as read in the last VBlank
+PALETTE_PENDING = $003016 ; byte: the VBlank took the palette: upload it
+SA1_IRQ_DP   = $3300    ; the SA-1 VBlank interrupt's own direct page
 
 ; The SA-1's direct page and stack are also in I-RAM
 SA1_DP       = $3100
