@@ -48,9 +48,28 @@ down or run at a lower rate, which would no longer match the original.
 
 ## Language
 
-The port is written in 65816 assembly (ca65). C compilers for the 65816
-(tcc-816 in PVSnesLib, Calypsi) produce code several times slower than
-hand-written assembly, and the budget above has no room for that.
+The game code is `src/game` itself, compiled for the SA-1 by
+`tools/snes/c816.py`. The compiler handles the C subset the game uses:
+- `rd`/`wr` become accesses to the Genesis RAM mirror (bank $40,
+  big-endian) or the Genesis ROM copy. Constant VDP port writes become
+  calls into the VDP layer, and anything else goes to the runtime
+  (`snes/rt.s`).
+- C's integer rules are kept, with 16-bit code where values are known to
+  fit.
+
+Hand-written 65816 covers:
+- the S-CPU (`snes/boot.s`);
+- the SA-1 shell and its VBlank interrupt (`snes/sa1.s`);
+- the Genesis VDP layer: ports, DMA, maps, tile slots and HDMA scroll
+  (`snes/vdp.s`);
+- the sprite renderer (`snes/sprites.s`);
+- the hot spots that the profiler shows (`snes/road.s`). These replace
+  compiled functions of the same name (`SNES_C_SKIP` in the Makefile).
+
+Debug builds:
+- `make snes SNES_TRACE=1` records each compiled function's entry in a
+  ring buffer.
+- `SNES_PROFILE=1` samples the SA-1's address at every VBlank.
 
 ## Checking the port
 
@@ -150,25 +169,22 @@ approximated by samples and the DSP's ADSR.
 
 ## Milestones
 
-1. Done: toolchain, headless runner, screen converter and viewer.
-2. Done: SA-1 skeleton. Both CPUs boot, there is a VBlank upload queue
-   with PPU register shadows, the pad is read, and assets are extracted
-   from `sho.md` at build time (Nemesis decoding).
-3. Logo and title running:
-   - `snes/logo.s` matches the Genesis frame for frame, three frames
-     later.
-   - The title (`snes/title.s`) runs on the VDP layer (`snes/vdp.s`),
-     the object system (`snes/objects.s`) and the sprite renderer
-     (`snes/sprites.s`).
-   - Compared with the Genesis 45 frames earlier, its object table,
-     sprite table, palette and menu state match byte for byte.
-   - Only full 2x2 groups become 16x16 OBJs; the rest are 8x8. That
-     keeps the landed letters within 34 OBJ slices a line, which 16x16
-     OBJs alone did not.
-4. Race renderer: road by HDMA, sprite frames, HUD.
-5. Race logic, compared variable by variable with the recordings.
-6. Menus: course and music select, password, shop, ranking, options.
-7. Sound driver on the SPC700.
+1. Done: toolchain, headless runner, screen converter.
+2. Done: SA-1 shell, VBlank interrupt, upload lists, assets from the ROM.
+3. Done: the whole game compiled from `src/game`.
+   - The logo and title match the Genesis's RAM byte for byte.
+   - The course and music select screens work.
+   - The attract demo race draws its road by HDMA and runs at 20 race
+     frames a second.
+   - At the end of every race frame, its 64 KB of RAM matches the
+     Genesis's, apart from the VBlank counters.
+4. Next:
+   - The logo and setup speed. The compiled logo is slow, and setups take
+     longer than the Genesis's.
+   - Checking the real race (with input) and the other modes against the
+     recordings. Input must be keyed to game frames, see Timing.
+   - Sprite slices in busy race scenes.
+5. Sound: an SPC700 driver.
 
 ## Open decisions
 
