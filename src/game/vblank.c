@@ -934,6 +934,20 @@ static void read_pad(uint32_t state, uint32_t port)      /* $81BA */
     hi = rd8(port);
     now = (uint8_t)~((hi & 0x3f) | ((lo << 2) & 0xc0));
     changed = rd8(state) ^ now;
+#ifdef SNES
+    {
+        /* A game frame that outlasts a VBlank sees a second read; the
+           Genesis reads once a frame, so keep the presses the frame has
+           not had yet. */
+        static uint8_t frame_seen[2];
+        int k = state != PAD1_HELD;
+        uint8_t kept = frame_seen[k] == rd8(FRAME_COUNTER_BYTE) ? rd8(state + 1) : 0;
+        frame_seen[k] = rd8(FRAME_COUNTER_BYTE);
+        wr8(state, now);
+        wr8(state + 1, (now & changed) | kept);
+        return;
+    }
+#endif
     wr8(state, now);
     wr8(state + 1, now & changed);   /* newly pressed */
 }

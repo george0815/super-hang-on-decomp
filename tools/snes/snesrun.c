@@ -4,6 +4,7 @@
  *
  * usage: snesrun CORE.so ROM FRAMES [-i SCRIPT] [-s FRAME]... [-o PREFIX]
  *                [-w WRAM.bin] [-b BWRAM.bin] [-v VRAM.bin] [-B FRAME]...
+ *                [-P PADLOG]
  *
  * The script has the Genesis tools' format (tests/inputs/NAME.txt): lines of
  * "FIRST LAST BUTTONS" with buttons from UDLRABCS. The Genesis pad maps to
@@ -12,6 +13,10 @@
  * -w, -b and -v dump work RAM,
  * the cartridge RAM (SA-1 BW-RAM) and VRAM after the last frame; -B dumps
  * the BW-RAM to PREFIX_FRAME.bwram after that frame (or each of FIRST-LAST).
+ * -P drives the pad by the game's own frames instead of the video's: the
+ * port's pad log (livetest SHO_PADLOG) gives the pad the game read in each
+ * game frame (the main loop's count at $FFC726, in the BW-RAM's mirror of
+ * the Genesis RAM), and the SNES gets the same in its game frame.
  */
 #include <dlfcn.h>
 #include <stdarg.h>
@@ -59,9 +64,34 @@ static void load_script(const char *path)
     fclose(f);
 }
 
+#define FRAME_COUNTER 0xC726                /* $FFC726 in the RAM mirror */
+#define RAM_SIGNATURE 0x0000                /* $FF0000: "init" once reset() ran */
+static uint16_t *padlog;
+static unsigned *padlog_frame;
+static int npadlog, padlog_at;
+static unsigned game_frames, game_last;
+static const uint8_t *bw_mem;               /* the BW-RAM, for -P */
+
+/* A Genesis pad (S A C B R L D U) as the SNES's, as the port maps it */
+static uint16_t snes_pad(unsigned md)
+{
+    uint16_t pad = 0;
+    if (md & 0x01) pad |= 1 << RETRO_DEVICE_ID_JOYPAD_UP;
+    if (md & 0x02) pad |= 1 << RETRO_DEVICE_ID_JOYPAD_DOWN;
+    if (md & 0x04) pad |= 1 << RETRO_DEVICE_ID_JOYPAD_LEFT;
+    if (md & 0x08) pad |= 1 << RETRO_DEVICE_ID_JOYPAD_RIGHT;
+    if (md & 0x10) pad |= 1 << RETRO_DEVICE_ID_JOYPAD_B;
+    if (md & 0x20) pad |= 1 << RETRO_DEVICE_ID_JOYPAD_A;
+    if (md & 0x40) pad |= 1 << RETRO_DEVICE_ID_JOYPAD_Y;
+    if (md & 0x80) pad |= 1 << RETRO_DEVICE_ID_JOYPAD_START;
+    return pad;
+}
+
 static uint16_t pad_now(void)
 {
     uint16_t pad = 0;
+    if (padlog)
+        return padlog_at < npadlog ? snes_pad(padlog[padlog_at]) : 0;
     for (int k = 0; k < nscript; k++)
         if (frame >= script[k].first && frame <= script[k].last)
             pad |= script[k].pad;
@@ -225,6 +255,19 @@ int main(int argc, char **argv)
                 if (n >= 0 && n < (int)sizeof bwshot) bwshot[n] = 1;
         }
         else if (!strcmp(argv[k], "-o")) prefix = argv[k + 1];
+        else if (!strcmp(argv[k], "-P")) {
+            FILE *pf = fopen(argv[k + 1], "r");
+            unsigned v;
+            if (!pf) { perror(argv[k + 1]); return 1; }
+            unsigned g;
+            padlog = malloc(sizeof *padlog * (1 << 20));
+            padlog_frame = malloc(sizeof *padlog_frame * (1 << 20));
+            while (npadlog < (1 << 20) && fscanf(pf, "%u %x", &g, &v) == 2) {
+                padlog_frame[npadlog] = g;
+                padlog[npadlog++] = (uint16_t)v;
+            }
+            fclose(pf);
+        }
         else if (!strcmp(argv[k], "-w")) wram = argv[k + 1];
         else if (!strcmp(argv[k], "-b")) bwram = argv[k + 1];
         else if (!strcmp(argv[k], "-v")) vram = argv[k + 1];
@@ -256,8 +299,21 @@ int main(int argc, char **argv)
     retro_set_input_poll(input_poll);
     retro_set_input_state(input_state);
     if (!retro_load_game(&game)) { fprintf(stderr, "the core rejected %s\n", argv[2]); return 1; }
+    bw_mem = retro_get_memory_data(RETRO_MEMORY_SAVE_RAM);
 
     for (frame = 0; frame < frames; frame++) {
+        if (padlog && bw_mem && !memcmp(bw_mem + RAM_SIGNATURE, "init", 4)) {
+            /* (counted once reset() has cleared the RAM and signed it) */
+            unsigned now = bw_mem[FRAME_COUNTER];
+            game_frames += (now - game_last) & 0xFF;
+            game_last = now;
+            /* the first read in this game frame (the one its logic acts on;
+               a frame that runs long, as with a fade, reads again), or
+               the last one before it if none */
+            while (padlog_at + 1 < npadlog && padlog_frame[padlog_at] < game_frames
+                   && padlog_frame[padlog_at + 1] <= game_frames)
+                padlog_at++;
+        }
         retro_run();
         if (frame < (int)sizeof bwshot && bwshot[frame]) {
             char path[512];

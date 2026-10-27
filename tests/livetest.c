@@ -4,6 +4,9 @@
  *
  * usage: livetest ROM FRAMES INPUT.txt OUTDIR [FRAME]...
  * SHO_MIX=master,music,engine,effects (percent) overrides the sound mix.
+ * SHO_PADLOG=FILE lists the pad as the game reads it, one line per read:
+ * the game frame (the main loop's count, $FFC726, carried past 255) and
+ * the pad (hex, S A C B R L D U), for driving the SNES build (snesrun -P).
  * Audio is written to OUTDIR/live.wav, the timed YM2612 register writes to
  * OUTDIR/live.ymlog.
  */
@@ -60,14 +63,24 @@ static void load_script(const char *path)
     fclose(f);
 }
 
+static FILE *padlog;
+
 uint16_t host_pad(int port)
 {
+    static int calls;
     int i;
     uint16_t p = 0;
     if (port) return 0;
     for (i = 0; i < nscript; i++)
         if (frame >= script[i].first && frame <= script[i].last)
             p |= script[i].pad;
+    if (padlog && calls++ & 1) {    /* (each read takes the port twice) */
+        static unsigned frames, last;
+        unsigned now = m68k_ram[0xC726];
+        frames += (now - last) & 0xFF;
+        last = now;
+        fprintf(padlog, "%u %02X\n", frames, p);
+    }
     return p;
 }
 
@@ -169,6 +182,8 @@ int main(int argc, char **argv)
         ymlog = fopen(path, "w");
         if (ymlog) sound_write_hook = log_ym;
     }
+    if (getenv("SHO_PADLOG"))
+        padlog = fopen(getenv("SHO_PADLOG"), "w");
     if (getenv("SHO_MIX"))
         sscanf(getenv("SHO_MIX"), "%d,%d,%d,%d", &sound_settings.master,
                &sound_settings.group[SND_MUSIC], &sound_settings.group[SND_ENGINE],
