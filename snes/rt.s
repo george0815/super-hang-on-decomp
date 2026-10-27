@@ -486,8 +486,11 @@ rt_mul32:
     lda r_t4
     rtl
 
-; Signed 16-bit A * X -> A:CHI (32 bits), on the SA-1's multiplier.
+; Signed 16-bit A * X -> A:CHI (32 bits), on the SA-1's multiplier. (Its
+; users mask the VBlank interrupt, whose code multiplies too.)
 rt_muls16:
+    php
+    sei
     sta f:MA
     sep #$20
     .a8
@@ -502,6 +505,7 @@ rt_muls16:
     lda f:MR + 2
     sta CHI
     lda f:MR
+    plp
     rtl
 
 ; Unsigned 16-bit A * X -> A:CHI.
@@ -515,6 +519,8 @@ rt_mulu16:
 mulu16:
     sta m_a
     stx m_b
+    php
+    sei
     sep #$20
     .a8
     lda #0
@@ -530,6 +536,9 @@ mulu16:
     nop
     lda f:MR + 2
     sta CHI
+    lda f:MR
+    plp
+    pha
     lda m_a
     bpl :+
     lda CHI
@@ -542,7 +551,7 @@ mulu16:
     clc
     adc m_a
     sta CHI
-:   lda f:MR
+:   pla
     rts
 
 ; Shifts: A (and CHI) by X.
@@ -754,6 +763,31 @@ divu32:
 :   stz r_t4
     stz r_t5
     ldx #32
+    lda r_t3                ; a 16-bit dividend: its first 16 steps only
+    bne :+                  ; shift zeros through
+    lda r_t2
+    sta r_t3
+    stz r_t2
+    ldx #16
+:   lda r_t1
+    bne @bit
+    lda #0                  ; a 16-bit divisor: the remainder in A
+@bit16:
+    asl r_t2
+    rol r_t3
+    rol a
+    bcs :+                  ; (17 bits: past the divisor whatever it is)
+    cmp r_t0
+    bcc @next16
+:   sbc r_t0
+    inc r_t2
+@next16:
+    dex
+    bne @bit16
+    sta r_t4
+    lda r_t3
+    sta CHI
+    rts
 @bit:
     asl r_t2
     rol r_t3

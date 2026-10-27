@@ -93,6 +93,10 @@ hofs        = $A2
 row_md      = $A4       ; convert_row: the name table's address,
 row_off     = $A6       ;  the entry's offset in it,
 row_left    = $A8       ;  entries left
+hs_ptr      = $AA       ; hdma_build: the horizontal scroll table (24 bits)
+hfast       = $AE       ;  and whether the race's per-line form is in use
+last_tile   = $B6       ; dma_vram: the tile it marked last (it runs in the
+                        ;  VBlank interrupt: past race_build_road's $80-$B5)
 
 .segment "CODE"
 .a16
@@ -317,8 +321,9 @@ vdp_ctrl_write:
 vdp_data_write:
     stz z:ctrl_pending
     ldx z:fill_pending
-    bne dma_fill
-    jmp vdp_write
+    beq :+
+    jmp dma_fill
+:   jmp vdp_write
 
 ; A word read from the data port.
 vdp_data_read:
@@ -373,6 +378,14 @@ dma_copy:
 :   clc
     adc #^MDROM
 :   sta z:dma_src + 2
+    lda z:vdp_code          ; to VRAM a word at a time: dma_vram
+    cmp #1
+    bne @word
+    lda z:VDP_REGS + 15
+    and #$00FF
+    cmp #2
+    bne @word
+    jmp dma_vram
 @word:
     lda [dma_src]
     xba
@@ -384,6 +397,56 @@ dma_copy:
     dec z:dma_left
     bne @word
     rts
+
+; dma_copy's usual case: to VRAM with an increment of 2. vram_word's work,
+; comparing the words as stored (big-endian) and marking each tile once.
+dma_vram:
+    ldx z:vdp_addr
+    ldy #0
+    lda #$FFFF
+    sta z:last_tile
+@word:
+    lda [dma_src], y
+    cmp f:VRAM_MIRROR, x
+    bne @changed
+@next:
+    iny
+    iny
+    inx
+    inx
+    dec z:dma_left
+    bne @word
+    stx z:vdp_addr
+    tya
+    clc
+    adc z:dma_src
+    sta z:dma_src
+    rts
+@changed:
+    sta f:VRAM_MIRROR, x
+    phy
+    phx
+    xba
+    pha
+    txa
+    lsr
+    lsr
+    lsr
+    lsr
+    lsr
+    cmp z:last_tile
+    beq :+
+    sta z:last_tile
+    jsr mark_tile
+:   pla
+    plx
+    phx
+    cpx #PLANE_A
+    bcc :+
+    jsr map_word
+:   plx
+    ply
+    bra @next
 
 ; A DMA fill (the game only fills with 0): the length's bytes plus one
 ; from the address, zeroed.
@@ -1221,7 +1284,16 @@ hdma_build:
 :   lda z:VDP_REGS + 11
     and #$0003
     sta z:hs_mode
-    ldx #0                  ; no rows on screen yet
+    stz z:hfast             ; per-line scroll both ways: line_fast
+    cmp #3
+    bne :+
+    lda z:vs_table
+    sta z:hfast
+    lda #HSCROLL
+    sta z:hs_ptr
+    lda #^VRAM_MIRROR
+    sta z:hs_ptr + 2
+:   ldx #0                  ; no rows on screen yet
     lda #0
 :   sta f:vis_a, x
     inx
@@ -1245,9 +1317,15 @@ hdma_build:
     clc
     adc #SC_SIZE
     sta z:hofs              ; and the next scroll entries (BG2's OFS_SIZE on)
-@line:
+hdma_line:
     lda z:hline
     beq :+
+    ldx z:hfast
+    beq @dec
+    cmp #2
+    bcc @dec
+    jmp line_fast
+@dec:
     dec                     ; the Genesis line
 :   sta z:gline
     ; BG1: the window, or plane A
@@ -1313,6 +1391,7 @@ hdma_build:
     ldx z:hofs
     sta f:hdma_bufs + OFS_SIZE + 2, x
     ; next line; after 112, the second header
+hdma_next:
     inc z:hsc
     lda z:hofs
     clc
@@ -1341,7 +1420,7 @@ hdma_build:
 :   lda z:hline
     cmp #HDMA_LINES
     beq :+
-    jmp @line
+    jmp hdma_line
 :   ldx z:hsc               ; the ends
     sep #$20
     .a8
@@ -1355,6 +1434,113 @@ hdma_build:
     lda z:hdma_cur
     sta f:HDMA_TABLES
     rts
+
+; A line from the second on with both scrolls per line (races): the
+; general case's work in a line, A = hline.
+line_fast:
+    dec
+    sta z:gline
+    asl
+    asl
+    tay                     ; the line's scroll entries
+    lda z:gline
+    cmp z:win_end
+    lda z:win_down
+    bne :+
+    bcc @window
+    bra @plane_a
+:   bcs @window
+@plane_a:
+    sep #$20
+    .a8
+    lda #(PLANE_A_MAP >> 10 << 2) | 3
+    ldx z:hsc
+    sta f:hdma_bufs, x
+    rep #$20
+    .a16
+    lda [hs_ptr], y
+    xba
+    eor #$FFFF
+    sec
+    adc #CROP
+    and #$03FF
+    ldx z:hofs
+    sta f:hdma_bufs, x
+    lda (vs_table), y
+    xba
+    pha
+    clc
+    adc z:gline
+    and #$01F8
+    lsr
+    lsr
+    lsr
+    tax
+    sep #$20
+    .a8
+    lda #1
+    sta f:vis_a, x
+    rep #$20
+    .a16
+    pla
+    dec
+    and #$03FF
+    ldx z:hofs
+    sta f:hdma_bufs + 2, x
+    bra @plane_b
+@window:
+    lda z:gline
+    lsr
+    lsr
+    lsr
+    tax
+    sep #$20
+    .a8
+    lda #1
+    sta f:vis_w, x
+    lda #(WINDOW_MAP >> 10 << 2) | 1
+    ldx z:hsc
+    sta f:hdma_bufs, x
+    rep #$20
+    .a16
+    lda #CROP
+    ldx z:hofs
+    sta f:hdma_bufs, x
+    lda #$FFFF
+    sta f:hdma_bufs + 2, x
+@plane_b:
+    iny
+    iny
+    lda [hs_ptr], y
+    xba
+    eor #$FFFF
+    sec
+    adc #CROP
+    and #$03FF
+    ldx z:hofs
+    sta f:hdma_bufs + OFS_SIZE, x
+    lda (vs_table), y
+    xba
+    pha
+    clc
+    adc z:gline
+    and #$01F8
+    lsr
+    lsr
+    lsr
+    tax
+    sep #$20
+    .a8
+    lda #1
+    sta f:vis_b, x
+    rep #$20
+    .a16
+    pla
+    dec
+    and #$03FF
+    ldx z:hofs
+    sta f:hdma_bufs + OFS_SIZE + 2, x
+    jmp hdma_next
 
 ; Plane A's (B's) row shown on line gline with vertical scroll A, on
 ; screen; A is kept.

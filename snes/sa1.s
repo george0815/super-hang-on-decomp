@@ -19,13 +19,12 @@
 
 UPLOAD_A = $E000        ; the two upload lists (bank $41)
 
-.ifdef PROFILE
-PROFILE_RING = $43C000  ; (the top of the tile cache: free in profiling runs)
-PROFILE_SIZE = $4000
-.endif
-
 .segment "BWRAM"
+.ifdef PROFILE
+PROFILE_SIZE = $400     ; the last 256 VBlanks: dump BW-RAM every 256 frames
 profile_pos: .res 2
+profile_ring: .res PROFILE_SIZE
+.endif
 iram_copy: .res $200    ; I-RAM $3000-$31FF, each VBlank (dumps can't see I-RAM)
 UPLOAD_B = $F000
 
@@ -65,6 +64,9 @@ sa1_reset:
     lda #0
     sta f:pad_frames
     sta f:pad_last
+.ifdef PROFILE
+    sta f:profile_pos       ; (BW-RAM starts out as whatever the cartridge held)
+.endif
     jsr vdp_reset
     jsr sprites_reset
     jsl c_init              ; the C's initialised statics
@@ -84,9 +86,9 @@ sa1_irq:
     lda f:profile_pos
     tax
     lda 6, s                ; PC (under X, A and P)
-    sta f:PROFILE_RING, x
+    sta f:profile_ring, x
     lda 8, s                ; PB
-    sta f:PROFILE_RING + 2, x
+    sta f:profile_ring + 2, x
     txa
     clc
     adc #4

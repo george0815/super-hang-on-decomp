@@ -70,6 +70,12 @@ Debug builds:
 - `make snes SNES_TRACE=1` records each compiled function's entry in a
   ring buffer.
 - `SNES_PROFILE=1` samples the SA-1's address at every VBlank.
+- For exact profiles, `tools/snes/snes9x-sa1prof.patch` adds a profiler
+  to the snes9x core (apply it in `tools/ext/snes9x`, then rebuild with
+  `make -C tools/ext/snes9x/libretro`). With `SA1PROF=file` set (and
+  optionally `SA1PROF_FROM`/`SA1PROF_TO`, a range of video frames), the
+  core counts the SA-1's cycles per instruction address and writes them
+  at exit. `tools/snes/sa1prof.py file` sums them per function.
 
 ## Checking the port
 
@@ -87,11 +93,21 @@ routine that diverged, as `make verify` does for the C.
 - The SNES runs behind the Genesis: its screen setups take longer, and it
   waits for their uploads before turning the display on.
 
-**Timing.** The recorded input scripts press buttons at given frames.
-Driving a race on the SNES with them will need one of two things:
-- the SNES's setups paced to take as many frames as the Genesis's;
-- or input scripts keyed to the game's own frame count, with
-  `snesrun` reading the counter from RAM each frame.
+**Timing.** The recorded input scripts press buttons at given video
+frames, and the SNES takes more video frames per game frame. So a test
+build plays a recording by game frame instead:
+`make snes SNES_PADLOG=file` builds in a table of the pad the game read in
+each game frame, taken from a native-port pad log (livetest with
+`SHO_PADLOG=file`). With it, every complete race frame of
+`tests/inputs/race.txt` matches the Genesis's RAM at the end of the frame,
+apart from the bytes that depend on how many VBlanks a frame takes (the
+VBlank's DMA stream at $FFC7CC).
+
+**Interrupt safety.** The VBlank interrupt runs compiled C and parts of
+the VDP layer. It saves the compiled code's temporaries ($E0-$FF) and the
+VDP port state. Hand-written code that it can interrupt keeps its direct
+page apart from the interrupt's (road.s's $80-$B5 against vdp.s's DMA
+bytes), and the SA-1's multiplier is used with the interrupt masked.
 
 ## Video
 

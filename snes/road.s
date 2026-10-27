@@ -517,7 +517,8 @@ MB_L              = $002253
 MR_L              = $002306
 MCNT_L            = $002250
 
-; direct page: $80-$9F (race_build_road)
+; direct page: $80-$B5 (race_build_road; vdp.s uses $B6 up in the VBlank
+; interrupt)
 rb_p        = $80       ; the track pointer (24 bits; in the ROM copy)
 rb_vx       = $84
 rb_vy       = $86
@@ -555,8 +556,11 @@ rb_l        = $B4
     plx
 .endmacro
 
-; Signed 16-bit A * X -> A:CHI (the SA-1's multiplier).
+; Signed 16-bit A * X -> A:CHI (the SA-1's multiplier, with the VBlank
+; interrupt, which multiplies too, masked).
 smul:
+    php
+    sei
     sta f:MA_L
     sep #$20
     .a8
@@ -571,6 +575,7 @@ smul:
     lda f:MR_L + 2
     sta CHI
     lda f:MR_L
+    plp
     rts
 
 ; Project the road ahead into the per-line bend table ($ED7C): walk 33
