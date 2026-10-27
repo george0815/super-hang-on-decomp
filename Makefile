@@ -3,7 +3,7 @@ SHA1    := ecfd7b3bf4dcbee472ddf2f9cdbe968a05b814e0
 PYTHON  ?= python3
 VASM    ?= tools/bin/vasmm68k_mot
 
-.PHONY: all check disasm report rom recomp fntest replay verify sndtest port snes snes-shots snes-snap clean FORCE
+.PHONY: all check disasm report rom recomp fntest replay verify sndtest port snes snes-shots snes-check snes-snap clean FORCE
 
 all: disasm
 
@@ -136,9 +136,9 @@ build/snes/assets.o: build/snes/gen/assets.s
 build/snes/%.o: snes/%.s $(SNES_INCS)
 	$(CA65) --cpu 65816 -g -I snes -I build/snes $(SNES_ASFLAGS) -o $@ $<
 
-build/snes/c/%.s: src/game/%.c src/game/game.h tools/snes/c816.py $(wildcard tools/snes/include/*.h)
+build/snes/c/%.s: src/game/%.c src/game/game.h tools/snes/c816.py $(wildcard tools/snes/include/*.h) build/snes/flags
 	@mkdir -p build/snes/c
-	$(PYTHON) tools/snes/c816.py $@ $(or $(patsubst $*:%,%,$(filter $*:%,$(SNES_C_BANK))),CCODE3) $< --skip $(SNES_C_SKIP) $(if $(SNES_TRACE),--trace)
+	$(PYTHON) tools/snes/c816.py $@ $(or $(patsubst $*:%,%,$(filter $*:%,$(SNES_C_BANK))),CCODE3) $< --skip $(SNES_C_SKIP) $(if $(SNES_TRACE),--trace) $(if $(SNES_PADLOG),--cpp-arg -DPADTABLE)
 
 build/snes/c/%.o: build/snes/c/%.s $(SNES_INCS)
 	$(CA65) --cpu 65816 -g -I snes -I build/snes -o $@ $<
@@ -165,6 +165,13 @@ FRAMEDUMP ?=            # 1 (with SNES_PADLOG builds): build/snes/shot_fN.ram as
 INPUT  ?= tests/inputs/attract.txt
 snes-shots: build/snes/shangon.sfc tools/snes/snesrun
 	tools/snes/snesrun $(SNESCORE) $< $(FRAMES) -i $(INPUT) $(foreach f,$(SHOTS),-s $(f)) $(foreach f,$(BWSHOTS),-B $(f)) $(if $(PADLOG),-P $(PADLOG)) $(if $(FRAMEDUMP),-F) -o build/snes/shot -w build/snes/wram.bin -b build/snes/bwram.bin -v build/snes/vram.bin
+
+# Each recording (CHECK=names, default all) on the SNES against the native
+# port, the RAM as each game frame ends (tools/snes/framecheck.sh; KEEP=1
+# keeps the dumps in build/framecheck). Leaves a test build in build/snes.
+CHECK ?= $(patsubst tests/inputs/%.txt,%,$(wildcard tests/inputs/*.txt))
+snes-check: build/livetest tools/snes/snesrun
+	@for r in $(CHECK); do MAKE="$(MAKE)" PYTHON="$(PYTHON)" ROM="$(ROM)" tools/snes/framecheck.sh $$r || exit 1; done
 
 # A Genesis screen on the SNES: SNAP is a .vdp snapshot from livetest
 # (build/livetest ROM FRAMES INPUT OUTDIR FRAME); writes SNAPDIR/snap.sfc

@@ -108,6 +108,7 @@ void sound_command(uint8_t command);
 /* ----------------------------------------------------------- vblank.c */
 void vblank_menu(void);
 void vblank_race(void);
+void frame_start_pads(void);
 uint16_t char_tile(uint8_t c);
 void screen_reset(void);
 void display_on(void);

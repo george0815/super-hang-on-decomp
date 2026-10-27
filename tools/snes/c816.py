@@ -2033,9 +2033,7 @@ class Compiler:
     # ------------------------------------------------------------ statics
 
     def declare_static(self, d, t, sym):
-        if sym in self.declared:
-            return
-        self.declared.add(sym)
+        # (each pass over a function resolves a new type: size it every time)
         if t.kind == 'array' and t.n == 0 and isinstance(d.init, c_ast.InitList):
             n = k = 0
             for item in d.init.exprs:     # unsized: as many as initialised
@@ -2044,6 +2042,9 @@ class Compiler:
                 k += 1
                 n = max(n, k)
             t.n = n
+        if sym in self.declared:
+            return
+        self.declared.add(sym)
         const = 'const' in (d.quals or []) or self.is_const_type(d.type)
         if d.init is not None and const:
             self.data.append('%s:' % sym)

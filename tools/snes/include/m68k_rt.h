@@ -35,4 +35,10 @@ void f_cmp(int sz, uint32_t s, uint32_t d);
 uint32_t f_divs(uint32_t s, uint32_t d);
 uint32_t f_divu(uint32_t s, uint32_t d);
 uint16_t pop16(void);
+/* pad-table test builds read the race's pads as each frame starts */
+#ifdef PADTABLE
+#define test_frame_pads 1
+#else
+#define test_frame_pads 0
+#endif
 #endif

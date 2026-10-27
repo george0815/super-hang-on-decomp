@@ -6,6 +6,8 @@
  * SHO_MIX=master,music,engine,effects (percent) overrides the sound mix.
  * SHO_FRAMEDUMP=DIR saves the RAM as each game frame ends, to DIR/f_N.ram
  * for the Nth (to compare with the SNES build's, snesrun -F).
+ * SHO_FRAMEPADS=1 has race frames read the pads as they start, as the SNES
+ * pad-table builds do (test_frame_pads), for pad logs and dumps that match.
  * SHO_PADLOG=FILE lists the pad as the game reads it, one line per read:
  * the game frame (the main loop's count, $FFC726, carried past 255) and
  * the pad (hex, S A C B R L D U), for driving the SNES build (snesrun -P).
@@ -202,6 +204,8 @@ int main(int argc, char **argv)
         framedump = getenv("SHO_FRAMEDUMP");
         frame_end_hook = frame_end;
     }
+    if (getenv("SHO_FRAMEPADS"))
+        test_frame_pads = 1;
     if (getenv("SHO_PADLOG"))
         padlog = fopen(getenv("SHO_PADLOG"), "w");
     if (getenv("SHO_MIX"))

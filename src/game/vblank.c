@@ -972,6 +972,15 @@ static void read_pads(void)            /* $8196 */
     z80_bus_release();
 }
 
+/* Tests (test_frame_pads): a race frame reads the pads as it starts, not
+   in its first VBlank, so a recording's input reaches the same game frame
+   however the frame and the VBlanks line up. */
+void frame_start_pads(void)
+{
+    if (test_frame_pads && rd16(0xFFC722) == 8)
+        read_pads();
+}
+
 /* ----------------------------------------------------------- handlers */
 
 void vblank_menu(void)                 /* $7486 */
@@ -1009,7 +1018,8 @@ void vblank_race(void)                 /* $E906 */
         upload_palette();
         dma_slot(DMA_SLOT_2);
         dma_fixed_slots();
-        read_pads();
+        if (!test_frame_pads)
+            read_pads();
         hud_tasks();
         break;
     case 8:

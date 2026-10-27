@@ -108,13 +108,28 @@ each game frame, taken from a native-port pad log (livetest with
 `dir/f_N.ram`, and a `SNES_PADLOG` build run by `make snes-shots
 FRAMEDUMP=1` (snesrun `-F`) writes `build/snes/shot_fN.ram`. The SNES build
 sets a flag at $41DFF0 there and waits until snesrun has dumped bank $40.
-The Nth dumps pair up exactly. Over `tests/inputs/race.txt` (752 game
-frames) and `attract.txt` (507), they match except for bytes that depend
-on where the VBlanks fall in the frame:
-- the tile update counts at $FF094A (the VBlank clears them);
-- the HUD's digit scratch at $FF0582;
-- the DMA bookkeeping at $FFC706-$FFC70D and $FFC7EA;
-- the VBlank counters.
+The Nth dumps pair up exactly.
+
+**Pads by frame.** In a race the pads are read in the first VBlank of each
+race frame, and whether the frame's logic sees that read depends on where
+the VBlank falls, which differs on the SNES. So for these tests both sides
+read a race frame's pads as it starts instead (`test_frame_pads`: livetest
+`SHO_FRAMEPADS=1`, and always in `SNES_PADLOG` builds). The game is
+unchanged otherwise.
+
+**`make snes-check`** runs all of this for each recording (`CHECK=names`
+for some; `tools/snes/framecheck.sh`, `tools/snes/framecmp.py`). Every
+recording matches the Genesis at every game frame end, except:
+- bytes that depend on where the VBlanks fall: the tile update counts at
+  $FF094A and the parts HUD flag at $FFC89A (the VBlank clears them), the
+  HUD's digit scratch at $FF0582, DMA bookkeeping ($FFC708-$FFC70D,
+  $FFC7EA, the DMA stream at $FFC7CC), the VBlank counters, and a scroll
+  buffer flip ($FF0580/$FF06C4) now and then;
+- the pad bytes ($FFC706) at the end of a long setup: the Genesis reads
+  them at every VBlank of it, the pad table holds one value per game frame.
+
+Screens that loop on VBlanks inside one game frame (the password entry) end
+no frames, so they are not compared.
 
 When a SNES frame outlasts its ticks, `wait_frame_ticks` starts the next
 one at once, handing the VDP's changes to the next VBlank
@@ -209,13 +224,11 @@ approximated by samples and the DSP's ADSR.
    - The course and music select screens work.
    - The attract demo race draws its road by HDMA and runs at 20 race
      frames a second.
-   - At the end of every race frame, its 64 KB of RAM matches the
-     Genesis's, apart from the VBlank counters.
+   - Every recording matches the Genesis's RAM at the end of every game
+     frame, apart from VBlank timing (`make snes-check`).
 4. Next:
    - The logo and setup speed. The compiled logo is slow, and setups take
      longer than the Genesis's.
-   - Checking the real race (with input) and the other modes against the
-     recordings. Input must be keyed to game frames, see Timing.
    - Sprite slices in busy race scenes.
 5. Sound: an SPC700 driver.
 

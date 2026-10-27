@@ -264,6 +264,7 @@ void m68k_event(uint32_t pc)
  * original's address for the stacked return of an interrupt.
  */
 void (*frame_end_hook)(void);
+int test_frame_pads;
 
 void m68k_idle(uint32_t pc)
 {

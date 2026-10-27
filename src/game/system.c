@@ -137,6 +137,7 @@ void wait_frame_ticks(void)
     if ((int16_t)rd16(FRAME_TICKS) >= 8) {
         vdp_flush_c();
         wr16(FRAME_TICKS, 0);
+        frame_start_pads();
         return;
     }
 #endif
@@ -144,6 +145,7 @@ void wait_frame_ticks(void)
         wait_vblank();
     while ((int16_t)rd16(FRAME_TICKS) < 8);
     wr16(FRAME_TICKS, 0);
+    frame_start_pads();
 }
 
 void wait_frame_ticks_68k(void) { wait_frame_ticks(); }
