@@ -878,16 +878,24 @@ memset:
 ; The 68000's divisions, which the game's arithmetic relies on:
 ; f_divs(uint32_t s, uint32_t d), f_divu(s, d): d / (16-bit) s as the
 ; remainder << 16 | the quotient; on overflow d unchanged (V set on the
-; 68000); a zero divisor stops, as the original would trap.
+; 68000); a zero divisor stops, as the original would trap. The quotient
+; has to fit 16 bits, so 16 steps of shift and subtract do, starting from
+; the dividend's high word.
+div_overflow:
+    lda m_b                 ; (the dividend, kept by div_args)
+    sta CHI
+    lda m_a
+    rtl
+
 f_divu:
     jsr div_args
     lda r_t0
     bne :+
     jmp rt_fault_long
-:   stz r_t1
-    jsr divu32
-    lda r_t3                ; the quotient must fit 16 bits
-    bne div_overflow
+:   lda r_t3                ; d's high word must be below s
+    cmp r_t0
+    bcs div_overflow
+    jsr div16
     lda r_t4
     sta CHI
     lda r_t2
@@ -898,12 +906,7 @@ f_divs:
     lda r_t0
     bne :+
     jmp rt_fault_long
-:   cmp #$8000              ; the divisor sign-extended
-    lda #0
-    bcc :+
-    lda #$FFFF
-:   sta r_t1
-    lda r_t3                ; $80000000 / -1: 0
+:   lda r_t3                ; $80000000 / -1: 0
     cmp #$8000
     bne :+
     lda r_t2
@@ -914,16 +917,25 @@ f_divs:
     stz CHI
     lda #0
     rtl
-:   jsr signs
-    jsr divu32
-    lda r_t3                ; |quotient| must fit 15 bits (16 if negative)
-    bne div_overflow
+:   lda r_t0                ; the divisor sign-extended
+    cmp #$8000
+    lda #0
+    bcc :+
+    lda #$FFFF
+:   sta r_t1
+    jsr signs
+    lda r_t3                ; |d|'s high word must be below |s|
+    cmp r_t0
+    bcs div_overflow
+    jsr div16
     lda CT3
     beq @positive
     lda r_t2
     cmp #$8001
     bcs div_overflow
-    jsr neg_quotient
+    eor #$FFFF
+    inc
+    sta r_t2
     bra @rem
 @positive:
     lda r_t2
@@ -940,11 +952,25 @@ f_divs:
     lda r_t2
     rtl
 
-div_overflow:
-    lda m_b                 ; (the dividend, kept by div_args)
-    sta CHI
-    lda m_a
-    rtl
+; r_t3:r_t2 / r_t0 (unsigned, r_t3 < r_t0): quotient in r_t2, remainder
+; in r_t4.
+div16:
+    lda r_t3
+    ldx #16
+@bit:
+    asl r_t2
+    rol
+    bcs @sub                ; (17 bits: above the divisor)
+    cmp r_t0
+    bcc @next
+@sub:
+    sbc r_t0                ; (carry set)
+    inc r_t2
+@next:
+    dex
+    bne @bit
+    sta r_t4
+    rts
 
 ; s -> r_t0 (16 bits); d -> r_t3:r_t2, and a copy in m_b:m_a for the
 ; overflow case. (Past this jsr's and the jsl's return addresses: d at

@@ -681,6 +681,48 @@ class Compiler:
     def addr_const(self, a):
         return self.const_eval(a)
 
+    def addr_pattern(self, a):
+        """A cheaper form of an address: ('ram', base, e) for a RAM constant
+        plus a 16-bit offset, ('rom', base, e) for a ROM table plus an
+        unsigned 16-bit offset, ('var', var, c) for a 32-bit variable plus
+        a small constant; or None."""
+        parts = []              # (sign, term)
+
+        def flat(x, sign):
+            if isinstance(x, c_ast.BinaryOp) and x.op in ('+', '-'):
+                flat(x.left, sign)
+                flat(x.right, sign if x.op == '+' else -sign)
+            elif isinstance(x, c_ast.Cast) and self.resolve(x.to_type).is_int \
+                    and self.resolve(x.to_type).size == 4:
+                flat(x.expr, sign)
+            else:
+                parts.append((sign, x))
+        flat(a, 1)
+        consts = [(sg, x) for sg, x in parts if self.const_eval(x) is not None]
+        rest = [(sg, x) for sg, x in parts if self.const_eval(x) is None]
+        base = sum(sg * self.const_eval(x) for sg, x in consts) if consts else 0
+        if len(rest) == 1:
+            sign, e = rest[0]
+            cls = self.vclass(e)
+            # RAM: accesses stay in its 64 KB, so 16 bits of offset do
+            if 0xFF0000 <= base <= 0xFFFFFF:
+                return ('ram', base, e if sign > 0 else c_ast.UnaryOp('-', e))
+            if sign < 0:
+                return None
+            if 0 <= base < 0x400000 and cls.fits_u16() and consts:
+                return ('rom', base, e)
+            if isinstance(e, c_ast.ID) and -0x80 <= base <= 0x7F:
+                var = self.lookup(e.name)
+                if var is not None and var.type.is_int and var.type.size == 4:
+                    return ('var', var, base)
+        return None
+
+    def var_word(self, var, hi):
+        """The operand of a 32-bit variable's low (or high) word."""
+        if var.where == 'stack':
+            return self.sref(var, 2 if hi else 0)
+        return 'f:%s%s' % (var.symbol, ' + 2' if hi else '')
+
     def gen_read(self, size, a, need):
         addr = self.addr_const(a)
         if addr is not None:
@@ -696,6 +738,34 @@ class Compiler:
             self.emit('ldx #$%04X' % (addr >> 16))
             self.emit('stx CHI')
             self.emit('jsl rt_read%d' % size)
+            return 32 if size == 32 and need == 32 else 16
+        pat = self.addr_pattern(a)
+        if pat is not None and pat[0] == 'ram':
+            self.gen(pat[2], 16)
+            if pat[1] & 0xFFFF:
+                self.emit('clc')
+                self.emit('adc #$%04X' % (pat[1] & 0xFFFF))
+            self.emit('tax')
+            return self.read_at(size, 'a:0, x', 'a:2, x', need)
+        if pat is not None and pat[0] == 'rom':
+            self.gen(pat[2], 16)
+            self.emit('tax')
+            return self.read_at(size, 'f:MDROM + $%06X, x' % pat[1],
+                                'f:MDROM + $%06X, x' % (pat[1] + 2), need)
+        if pat is not None and pat[0] == 'var':
+            var, c = pat[1], pat[2]
+            done, slow = self.new_label(), self.new_label()
+            self.emit('lda %s' % self.var_word(var, True))
+            self.emit('cmp #$00FF')
+            self.emit('bne %s' % slow)
+            self.emit('lda %s' % self.var_word(var, False))
+            self.emit('tax')
+            self.read_at(size, 'a:$%04X, x' % (c & 0xFFFF), 'a:$%04X, x' % ((c + 2) & 0xFFFF), need)
+            self.emit('bra %s' % done)
+            self.label(slow)
+            self.gen(a, 32)
+            self.emit('jsl rt_read%d' % size)
+            self.label(done)
             return 32 if size == 32 and need == 32 else 16
         # computed: RAM fast path, else the runtime
         self.gen(a, 32)
@@ -762,6 +832,46 @@ class Compiler:
             self.emit('ldx #$%04X' % (addr >> 16))
             self.emit('stx CT1')
             self.emit('jsl rt_write%d' % size)
+            return
+        pat = self.addr_pattern(a)
+        if pat is not None and pat[0] == 'ram':
+            self.gen(pat[2], 16)
+            if pat[1] & 0xFFFF:
+                self.emit('clc')
+                self.emit('adc #$%04X' % (pat[1] & 0xFFFF))
+            self.push16()
+            self.gen(v, 32 if size == 32 else 16)
+            self.emit('plx')
+            self.depth -= 2
+            self.write_at(size, 'a:0, x', 'a:2, x')
+            return
+        if pat is not None and pat[0] == 'var':
+            var, c = pat[1], pat[2]
+            self.gen(v, 32 if size == 32 else 16)
+            lab_slow, lab_done = self.new_label(), self.new_label()
+            self.push16()
+            self.emit('lda %s' % self.var_word(var, True))
+            self.emit('cmp #$00FF')
+            self.emit('bne %s' % lab_slow)
+            self.emit('lda %s' % self.var_word(var, False))
+            self.emit('tax')
+            self.emit('pla')
+            self.depth -= 2
+            self.write_at(size, 'a:$%04X, x' % (c & 0xFFFF), 'a:$%04X, x' % ((c + 2) & 0xFFFF))
+            self.emit('bra %s' % lab_done)
+            self.label(lab_slow)
+            self.depth += 2             # (the value is still on the stack)
+            self.emit('lda %s' % self.var_word(var, False))
+            self.emit('clc')
+            self.emit('adc #$%04X' % (c & 0xFFFF))
+            self.emit('sta CT0')
+            self.emit('lda %s' % self.var_word(var, True))
+            self.emit('adc #$%04X' % (0xFFFF if c < 0 else 0))
+            self.emit('sta CT1')
+            self.emit('pla')
+            self.depth -= 2
+            self.emit('jsl rt_write%d' % size)
+            self.label(lab_done)
             return
         # computed: the address (kept on the stack), the value, then RAM
         # directly or the runtime
@@ -2176,7 +2286,8 @@ class Compiler:
         while changed:
             changed = False
             for name in list(self.defined):
-                if any(ref in statics and ref not in self.defined for ref in self.calls(bodies[name])):
+                if any(ref in statics and ref not in self.defined and ref not in self.skip
+                       for ref in self.calls(bodies[name])):
                     self.defined.discard(name)
                     changed = True
         # adapters the game code itself calls stay (their register
