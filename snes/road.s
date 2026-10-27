@@ -501,3 +501,498 @@ asr4:
     cmp #$8000
     ror
     rts
+
+; ------------------------------------------------------------ road builder
+
+.export race_build_road
+.import race__isqrt_hex, race__track_heading, f_divs
+
+ROAD_SCRATCH      = $0730
+ROAD_BEND_LINES   = $0B00
+COURSE_PROGRESS   = $0616
+TRACK_GEOMETRY    = $0800   ; long: the course's direction vectors
+ROM_SEGMENT_LINES = $00FA14 ; screen line of each of 33 segments
+MA_L              = $002251
+MB_L              = $002253
+MR_L              = $002306
+MCNT_L            = $002250
+
+; direct page: $80-$9F (race_build_road)
+rb_p        = $80       ; the track pointer (24 bits; in the ROM copy)
+rb_vx       = $84
+rb_vy       = $86
+rb_dirx     = $88
+rb_diry     = $8A
+rb_px       = $8C       ; 32 bits
+rb_py       = $90       ; 32 bits
+rb_x        = $94
+rb_y        = $96
+rb_seg      = $98
+rb_out      = $9A
+rb_prevx    = $9C
+rb_prevl    = $9E
+rb_side     = $A4
+rb_line     = $A6
+rb_t0       = $A8       ; 32 bits
+rb_t1       = $AC       ; 32 bits
+rb_step     = $B0
+rb_v        = $B2
+rb_l        = $B4
+
+; A:X (high word in X) signed 32 / Y (16 bits) as divs_q: f_divs's low
+; word (the quotient, or the dividend's low word on overflow).
+.macro divs_q_call
+    phy                     ; (f_divs(s, d): s high, s low, d high, d low)
+    phy
+    phx
+    pha
+    lda #0
+    sta 7, s                ; s's high word
+    jsl f_divs
+    plx
+    plx
+    plx
+    plx
+.endmacro
+
+; Signed 16-bit A * X -> A:CHI (the SA-1's multiplier).
+smul:
+    sta f:MA_L
+    sep #$20
+    .a8
+    lda #0
+    sta f:MCNT_L
+    rep #$20
+    .a16
+    txa
+    sta f:MB_L
+    nop
+    nop
+    lda f:MR_L + 2
+    sta CHI
+    lda f:MR_L
+    rts
+
+; Project the road ahead into the per-line bend table ($ED7C): walk 33
+; track segments from the bike, rotate them into the bike's heading,
+; divide the sideways offset by depth and fill the scanlines between
+; consecutive segments by linear interpolation; then double the 96 lines
+; to 192 and derive the road centre lines (plus the sideways sweep while
+; being pushed).
+race_build_road:
+    lda a:$C8A8
+    beq :+
+    rtl
+:   ldw COURSE_PROGRESS     ; idx = (progress >> 1) * 4 (signed)
+    cmp #$8000
+    ror
+    asl
+    asl
+    stw ROAD_SCRATCH
+    sta rb_t0
+    ldw TRACK_GEOMETRY + 2  ; p = base + (int16)idx
+    clc
+    adc rb_t0
+    sta rb_p
+    lda rb_t0
+    cmp #$8000
+    lda #0
+    bcc :+
+    lda #$FFFF
+:   sta rb_t1
+    ldw TRACK_GEOMETRY
+    adc rb_t1               ; (carry from the low words)
+    clc
+    adc #^MDROM
+    sta rb_p + 2
+    ; the direction at the bike, its length and the unit vector
+    ldy #0
+    lda [rb_p], y
+    xba
+    ldy #4
+    sta rb_t0
+    lda [rb_p], y
+    xba
+    clc
+    adc rb_t0
+    sta rb_vx
+    stw ROAD_SCRATCH + $30
+    ldy #2
+    lda [rb_p], y
+    xba
+    sta rb_t0
+    ldy #6
+    lda [rb_p], y
+    xba
+    clc
+    adc rb_t0
+    sta rb_vy
+    stw ROAD_SCRATCH + $40
+    lda rb_vx               ; vx * vx + vy * vy
+    tax
+    jsr smul
+    sta rb_t0
+    lda CHI
+    sta rb_t0 + 2
+    lda rb_vy
+    tax
+    jsr smul
+    clc
+    adc rb_t0
+    tax
+    lda CHI
+    adc rb_t0 + 2
+    pha                     ; isqrt_hex(uint32_t n)
+    phx
+    jsl race__isqrt_hex
+    plx
+    plx
+    sta rb_t1               ; len
+    lda rb_vx               ; dirx = divs_q(vx << 14, len)
+    jsr shl14
+    ldy rb_t1
+    divs_q_call
+    sta rb_dirx
+    stw ROAD_SCRATCH + $50
+    lda rb_vy
+    jsr shl14
+    ldy rb_t1
+    divs_q_call
+    sta rb_diry
+    stw ROAD_SCRATCH + $60
+    ; the heading (track_heading(uint32_t p), with p as the Genesis address)
+    lda rb_p + 2
+    sec
+    sbc #^MDROM
+    pha
+    pei (rb_p)
+    jsl race__track_heading
+    plx
+    plx
+    stw ROAD_HEADING
+    stz a:ROAD_SCRATCH + $70
+    stz a:ROAD_SCRATCH + $72
+    stz a:ROAD_SCRATCH + $80
+    stz a:ROAD_SCRATCH + $82
+    stz a:ROAD_SCRATCH + $90
+    stz a:ROAD_SCRATCH + $A0
+    stz rb_px
+    stz rb_px + 2
+    stz rb_py
+    stz rb_py + 2
+    stz rb_prevx
+    stz rb_prevl
+    lda #$BE
+    sta rb_out
+    lda #$20
+    sta rb_seg
+@segment:
+    ; px += (int16)p[0] + (int16)p[4]; py likewise from p[2], p[6]
+    ldy #0
+    lda [rb_p], y
+    xba
+    sta rb_t0
+    ldy #4
+    lda [rb_p], y
+    xba
+    jsr add_px
+    ldy #2
+    lda [rb_p], y
+    xba
+    sta rb_t0
+    ldy #6
+    lda [rb_p], y
+    xba
+    jsr add_py
+    lda rb_px + 2
+    stw ROAD_SCRATCH + $70
+    lda rb_px
+    stw ROAD_SCRATCH + $72
+    lda rb_py + 2
+    stw ROAD_SCRATCH + $80
+    lda rb_py
+    stw ROAD_SCRATCH + $82
+    lda rb_px               ; x = px >> 5, y = py >> 5 (16 bits)
+    ldx rb_px + 2
+    jsr asr5
+    sta rb_x
+    lda rb_py
+    ldx rb_py + 2
+    jsr asr5
+    sta rb_y
+    ; fwd = (x * dirx + y * diry) >> 7; the divisor is (fwd >> 7) + $410
+    lda rb_x
+    ldx rb_dirx
+    jsr smul
+    sta rb_t0
+    lda CHI
+    sta rb_t0 + 2
+    lda rb_y
+    ldx rb_diry
+    jsr smul
+    clc
+    adc rb_t0
+    sta rb_t0
+    lda CHI
+    adc rb_t0 + 2
+    sta rb_t0 + 2           ; x * dirx + y * diry
+    ldx #14                 ; >> 7 >> 7 (signed), low word only
+:   lda rb_t0 + 2
+    cmp #$8000
+    ror rb_t0 + 2
+    ror rb_t0
+    dex
+    bne :-
+    lda rb_t0
+    clc
+    adc #$0410
+    sta rb_t1               ; the divisor
+    ; side = divs_q(x * diry - y * dirx, divisor)
+    lda rb_x
+    ldx rb_diry
+    jsr smul
+    sta rb_t0
+    lda CHI
+    sta rb_t0 + 2
+    lda rb_y
+    ldx rb_dirx
+    jsr smul
+    sta CT0
+    lda rb_t0
+    sec
+    sbc CT0
+    sta rb_t0
+    lda rb_t0 + 2
+    sbc CHI
+    tax
+    lda rb_t0
+    ldy rb_t1
+    divs_q_call
+    sta rb_side
+    stw ROAD_SCRATCH + $B0
+    lda rb_seg
+    asl
+    tax
+    lda f:MDROM + ROM_SEGMENT_LINES, x
+    xba
+    sta rb_line
+    stw ROAD_SCRATCH + $C0
+    sec                     ; span = line - prev_line
+    sbc rb_prevl
+    bpl :+
+    jmp @expand
+:   bne :+
+    jmp @next
+:   sta rb_t1               ; step = divs_q((int16)(side - prev_x), span)
+    lda rb_side
+    sec
+    sbc rb_prevx
+    ldx #0
+    cmp #$8000
+    bcc :+
+    dex
+:   ldy rb_t1
+    divs_q_call
+    sta rb_step
+    lda rb_prevx
+    sta rb_v
+    lda rb_prevl
+    sta rb_l
+@fill:
+    lda rb_v
+    clc
+    adc rb_step
+    sta rb_v
+    inc rb_l
+    sec                     ; v > $3200 or v < $CE00 (signed): stop
+    sbc #$3201
+    bvc :+
+    eor #$8000
+:   bmi :+
+    jmp @expand
+:   lda rb_v
+    sec
+    sbc #$CE00
+    bvc :+
+    eor #$8000
+:   bpl :+
+    jmp @expand
+:   lda rb_v
+    ldx rb_out
+    stw ROAD_BEND_LINES, x
+    dex
+    dex
+    stx rb_out
+    bpl :+
+    jmp @expand
+:   lda rb_l
+    cmp rb_line
+    bne @fill
+    lda rb_side
+    sta rb_prevx
+    stw ROAD_SCRATCH + $90
+    lda rb_line
+    sta rb_prevl
+    stw ROAD_SCRATCH + $A0
+@next:
+    lda rb_p                ; p += 4
+    clc
+    adc #4
+    sta rb_p
+    bcc :+
+    inc rb_p + 2
+:   dec rb_seg
+    bmi @expand
+    jmp @segment
+@expand:
+    ; 96 lines -> 192 by inserting midpoints, from the bottom up
+    ldx #ROAD_BEND_LINES + $BE      ; src
+    ldy #ROAD_BEND_LINES + $180     ; dst
+    lda #$5F
+    sta rb_seg
+:   ldw 0, x                ; a
+    sta rb_t0
+    dey
+    dey
+    stw 0, y
+    dex
+    dex
+    ldw 0, x                ; b
+    sec
+    sbc rb_t0
+    cmp #$8000
+    ror
+    clc
+    adc rb_t0
+    dey
+    dey
+    stw 0, y
+    dec rb_seg
+    bne :-
+    ldw 2, x                ; b = src[1], d = (src[0] - b) >> 1
+    sta rb_t0
+    ldw 0, x
+    sec
+    sbc rb_t0
+    cmp #$8000
+    ror
+    clc
+    adc rb_t0
+    stw 2, x
+    ; road centre lines: the bend, plus a sweep while being pushed
+    ldw $0622
+    asl
+    asl
+    asl
+    asl
+    asl
+    asl
+    sta rb_t1               ; sweep
+    bne @sweep
+    ldx #0
+:   lda a:ROAD_BEND_LINES, x
+    sta a:ROAD_CENTRE_LINES, x
+    inx
+    inx
+    cpx #$E0 * 2
+    bcc :-
+    rtl
+@sweep:
+    ldx #0                  ; sweep = divs_q(sweep, $E0)
+    cmp #$8000
+    bcc :+
+    dex
+:   ldy #$E0
+    divs_q_call
+    sta rb_step
+    stz rb_t0               ; acc
+    ldx #0
+@centre:
+    ldw ROAD_BEND_LINES, x
+    cmp #$3210
+    beq :+
+    clc
+    adc rb_t0
+:   stw ROAD_CENTRE_LINES, x
+    lda rb_t0
+    clc
+    adc rb_step
+    sta rb_t0
+    inx
+    inx
+    cpx #$E0 * 2
+    bcc @centre
+    rtl
+
+; A (signed 16 bits) << 14 -> A (low word), X (high word).
+shl14:
+    cmp #$8000
+    ldx #0
+    bcc :+
+    dex
+:   stx rb_t0 + 2
+    ldx #14
+:   asl
+    rol rb_t0 + 2
+    dex
+    bne :-
+    ldx rb_t0 + 2
+    rts
+
+; px/py += (int16)rb_t0 + (int16)A (32 bits).
+add_px:
+    jsr sum16
+    clc
+    adc rb_px
+    sta rb_px
+    txa
+    adc rb_px + 2
+    sta rb_px + 2
+    rts
+
+add_py:
+    jsr sum16
+    clc
+    adc rb_py
+    sta rb_py
+    txa
+    adc rb_py + 2
+    sta rb_py + 2
+    rts
+
+; A:X (X the high word) = (int32)(int16)rb_t0 + (int32)(int16)A
+sum16:
+    sta CT0
+    ldx #0
+    cmp #$8000
+    bcc :+
+    dex
+:   stx CT1
+    lda rb_t0
+    ldx #0
+    cmp #$8000
+    bcc :+
+    dex
+:   stx CT2
+    clc
+    adc CT0
+    pha
+    lda CT2
+    adc CT1
+    tax
+    pla
+    rts
+
+; (A low, X high) >> 5, signed: the low word.
+asr5:
+    sta CT0
+    stx CT1
+    ldx #5
+:   lda CT1
+    cmp #$8000
+    ror CT1
+    ror CT0
+    dex
+    bne :-
+    lda CT0
+    rts

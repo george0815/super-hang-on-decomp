@@ -105,7 +105,7 @@ tools/snes/snesrun: tools/snes/snesrun.c
 # holds the hand-written rest. CCODE1-4 are 64 KB code banks.
 SNES_C_BANK = race:CCODE1 objects:CCODE2 vblank:CCODE4
 # C functions the SNES does its own way (snes/rt.s)
-SNES_C_SKIP = nemesis_to_vdp,nemesis_to_ram,scroll_tables,road_rows
+SNES_C_SKIP = nemesis_to_vdp,nemesis_to_ram,scroll_tables,road_rows,race_build_road
 SNES_TRACE ?=           # 1: compiled functions note their entry (debugging)
 SNES_PROFILE ?=         # 1: the VBlank interrupt samples the SA-1's address
 SNES_C_OBJS := $(patsubst src/game/%.c,build/snes/c/%.o,$(GAME))

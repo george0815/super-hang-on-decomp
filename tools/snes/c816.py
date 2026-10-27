@@ -754,13 +754,46 @@ class Compiler:
                                 'f:MDROM + $%06X, x' % (pat[1] + 2), need)
         if pat is not None and pat[0] == 'var':
             var, c = pat[1], pat[2]
-            done, slow = self.new_label(), self.new_label()
+            done, slow, rom = self.new_label(), self.new_label(), self.new_label()
             self.emit('lda %s' % self.var_word(var, True))
             self.emit('cmp #$00FF')
-            self.emit('bne %s' % slow)
+            self.emit('bne %s' % rom)
             self.emit('lda %s' % self.var_word(var, False))
             self.emit('tax')
             self.read_at(size, 'a:$%04X, x' % (c & 0xFFFF), 'a:$%04X, x' % ((c + 2) & 0xFFFF), need)
+            self.emit('bra %s' % done)
+            self.label(rom)             # ROM: through CPTR
+            self.emit('cmp #$0040')
+            self.emit('bcs %s' % slow)
+            self.emit('adc #^MDROM')
+            self.emit('sta CPTR + 2')
+            self.emit('lda %s' % self.var_word(var, False))
+            self.emit('clc')
+            self.emit('adc #$%04X' % (c & 0xFFFF))
+            self.emit('sta CPTR')
+            if c < 0 or c > 0:
+                lab = self.new_label()
+                if c >= 0:
+                    self.emit('bcc %s' % lab)
+                    self.emit('inc CPTR + 2')
+                else:
+                    self.emit('bcs %s' % lab)
+                    self.emit('dec CPTR + 2')
+                self.label(lab)
+            if size == 8:
+                self.emit('lda [CPTR]')
+                self.emit('and #$00FF')
+            elif size == 16:
+                self.emit('lda [CPTR]')
+                self.emit('xba')
+            else:
+                if need == 32:
+                    self.emit('lda [CPTR]')
+                    self.emit('xba')
+                    self.emit('sta CHI')
+                self.emit('ldy #2')
+                self.emit('lda [CPTR], y')
+                self.emit('xba')
             self.emit('bra %s' % done)
             self.label(slow)
             self.gen(a, 32)
@@ -1092,6 +1125,16 @@ class Compiler:
                     self.emit('adc CT0')
                 first = False
             return 16
+        if l.fits_s16() and r.fits_s16() or l.fits_u16() and r.fits_u16():
+            # 16 x 16: the SA-1's multiplier (signed; unsigned corrected)
+            self.gen(e.left, 16)
+            self.push16()
+            self.gen(e.right, 16)
+            self.emit('tax')
+            self.emit('pla')
+            self.depth -= 2
+            self.emit('jsl %s' % ('rt_muls16' if l.fits_s16() and r.fits_s16() else 'rt_mulu16'))
+            return 32 if wide else 16
         self.gen(e.left, 32)
         self.push32()
         self.gen(e.right, 32)
@@ -2306,8 +2349,7 @@ class Compiler:
             if name not in self.defined:
                 continue
             f = self.funcs[name]
-            if 'static' not in fd.decl.storage:
-                self.export.add(f.symbol)
+            self.export.add(f.symbol)       # (statics too: hand code may call them)
             try:
                 self.function(fd)
             except CompileError as err:
@@ -2352,7 +2394,7 @@ class Compiler:
         for s in exports:
             lines.append('.export %s' % s)
         lines.append('.import rt_read8, rt_read16, rt_read32, rt_write8, rt_write16, rt_write32')
-        lines.append('.import rt_mul32, rt_shl16, rt_shl32, rt_lsr16, rt_asr16, rt_lsr32, rt_asr32')
+        lines.append('.import rt_mul32, rt_muls16, rt_mulu16, rt_shl16, rt_shl32, rt_lsr16, rt_asr16, rt_lsr32, rt_asr32')
         lines.append('.import rt_divu16, rt_modu16, rt_divs32, rt_divu32, rt_mods32, rt_modu32')
         lines.append('.import rt_get_sr, rt_set_sr, rt_idle, rt_fault, rt_call_ptr')
         lines.append('.import rt_vdp_data16, rt_vdp_data32, rt_vdp_ctrl16, rt_vdp_ctrl32')

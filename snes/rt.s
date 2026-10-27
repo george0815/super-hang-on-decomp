@@ -16,7 +16,7 @@
 .include "gen/assets.inc"
 
 .export rt_read8, rt_read16, rt_read32, rt_write8, rt_write16, rt_write32
-.export rt_mul32, rt_shl16, rt_shl32, rt_lsr16, rt_asr16, rt_lsr32, rt_asr32
+.export rt_mul32, rt_muls16, rt_mulu16, rt_shl16, rt_shl32, rt_lsr16, rt_asr16, rt_lsr32, rt_asr32
 .export rt_divu16, rt_modu16, rt_divs32, rt_divu32, rt_mods32, rt_modu32
 .export rt_get_sr, rt_set_sr, rt_idle, rt_fault, rt_call_ptr
 .export rt_vdp_data16, rt_vdp_data32, rt_vdp_ctrl16, rt_vdp_ctrl32
@@ -452,6 +452,29 @@ rt_mul32:
     adc r_t5
     sta CHI
     lda r_t4
+    rtl
+
+; Signed 16-bit A * X -> A:CHI (32 bits), on the SA-1's multiplier.
+rt_muls16:
+    sta f:MA
+    sep #$20
+    .a8
+    lda #0
+    sta f:MCNT
+    rep #$20
+    .a16
+    txa
+    sta f:MB                ; starts it (5 cycles)
+    nop
+    nop
+    lda f:MR + 2
+    sta CHI
+    lda f:MR
+    rtl
+
+; Unsigned 16-bit A * X -> A:CHI.
+rt_mulu16:
+    jsr mulu16
     rtl
 
 ; Unsigned A * X -> A (low) : CHI (high), on the SA-1's signed multiplier:
