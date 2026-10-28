@@ -21,7 +21,7 @@
 .export rt_get_sr, rt_set_sr, rt_idle, rt_fault, rt_call_ptr
 .export rt_vdp_data16, rt_vdp_data32, rt_vdp_ctrl16, rt_vdp_ctrl32
 .export trace_ring, trace_pos, pad_frames, pad_last
-.export nemesis_to_vdp, nemesis_to_ram, memset, f_divs, f_divu, set_dn, f_logic
+.export nemesis_to_vdp, nemesis_to_ram, memset, f_divs, f_divu, set_dn, f_logic, hex_tiles
 .export sprites_begin_c, sprite_object_c, sprites_end_c, sprites_hide_c, vdp_flush_c, frame_sync_c
 .import vdp_ctrl_write, vdp_data_write, vdp_data_read, vdp_status, vdp_tiles
 .import vdp_flush, upload_handover
@@ -1071,22 +1071,19 @@ f_divs:
     rtl
 
 ; r_t3:r_t2 / r_t0 (unsigned, r_t3 < r_t0): quotient in r_t2, remainder
-; in r_t4.
+; in r_t4. (16 steps of shift and subtract, unrolled.)
 div16:
     lda r_t3
-    ldx #16
-@bit:
+.repeat 16
     asl r_t2
     rol
-    bcs @sub                ; (17 bits: above the divisor)
+    bcs :+                  ; (17 bits: above the divisor)
     cmp r_t0
-    bcc @next
-@sub:
-    sbc r_t0                ; (carry set)
+    bcc :++
+:   sbc r_t0                ; (carry set)
     inc r_t2
-@next:
-    dex
-    bne @bit
+:
+.endrep
     sta r_t4
     rts
 
@@ -1106,6 +1103,74 @@ div_args:
 
 rt_fault_long:
     brk
+
+; hex_tiles(uint32_t dst, uint32_t v, int n, uint16_t base, int shown)
+; (video.c): v's last n hex digits as tiles base << 8 + digit, plus $614
+; from the first nonzero digit (or the last, or all if shown) on, at dst
+; (in the RAM mirror: the data bank). The digits come off the top of v,
+; shifted up first so the first one is there. (shown at 4, s, base at 8,
+; n at 10, v at 14, dst at 18.)
+hex_tiles:
+    lda 10, s
+    beq @done
+    sta r_t3                ; digits left
+    lda 14, s
+    sta r_t0
+    lda 16, s
+    sta r_t1
+    lda #8
+    sec
+    sbc r_t3
+    beq :++
+    asl
+    asl
+    tax
+:   asl r_t0
+    rol r_t1
+    dex
+    bne :-
+:   lda 8, s
+    xba
+    and #$FF00
+    sta r_t2                ; base << 8
+    lda 4, s
+    ora 6, s
+    sta r_t4                ; shown
+    lda 18, s
+    tax
+@digit:
+    lda r_t1
+    and #$F000
+    xba
+    lsr
+    lsr
+    lsr
+    lsr
+    bne @shown
+    ldy r_t3                ; (the last digit always shows)
+    cpy #1
+    bne :+
+@shown:
+    ldy #1
+    sty r_t4
+:   clc
+    adc r_t2
+    ldy r_t4
+    beq :+
+    clc
+    adc #$0614
+:   xba
+    sta a:0, x
+    inx
+    inx
+.repeat 4
+    asl r_t0
+    rol r_t1
+.endrep
+    dec r_t3
+    bne @digit
+@done:
+    rtl
 
 ; Register bookkeeping for the recompiled original: nothing here.
 set_dn:

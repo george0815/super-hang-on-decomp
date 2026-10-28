@@ -69,7 +69,10 @@ Hand-written 65816 covers:
 
 The HDMA tables are rebuilt only when their inputs change, unless the
 vertical scroll is per line (races): the scroll modes, the window, VSRAM
-and the horizontal scroll table are compared with the last build's.
+and the horizontal scroll table are compared with the last build's. Map
+rows keep the range of columns written since they were last converted
+(row_lo, row_hi), and only those are converted and uploaded: the race
+changes a few entries of a row at a time (the hills, the HUD's digits).
 
 Debug builds:
 - `make snes SNES_TRACE=1` records each compiled function's entry in a
@@ -84,10 +87,12 @@ Debug builds:
   core counts the SA-1's cycles and executions per instruction address
   and writes them at exit. `tools/snes/sa1prof.py file` sums them per
   function, with each function's calls and cycles per call.
-- Speed by game mode: `make snes-shots TIMING=file` (snesrun `-T`) and
-  livetest with `SHO_TIMING=file` log the game's frame count and mode at
-  every video frame; `tools/snes/timing.py SNES [GENESIS]` gives the video
-  frames per game frame of each mode, side by side.
+- Speed by game mode: `make snes-shots TIMING=file` (snesrun `-T`) logs
+  the game's frame count and mode at every video frame;
+  `tools/snes/timing.py SNES [GENESIS]` gives the video frames per game
+  frame of each mode, side by side. For the Genesis, use a gpgx recording
+  (`tools/snes/vtrace_timing.py build/ref/NAME.vtrace file`): livetest's
+  own log (`SHO_TIMING`) leaves out the time the C takes.
 
 ## Checking the port
 
@@ -137,6 +142,10 @@ recording matches the Genesis at every game frame end, except:
   buffer flip ($FF0580/$FF06C4) now and then;
 - the pad bytes ($FFC706) at the end of a long setup: the Genesis reads
   them at every VBlank of it, the pad table holds one value per game frame.
+
+Every 50th frame, `tools/snes/mapcheck.py` also checks the SNES maps (snesrun
+`-F` saves bank $41 for it): each entry of a converted row, turned back into
+a Genesis entry through the tile slots, against the name table in VRAM.
 
 VRAM is written in the VBlank too, so a VRAM word counts as wrong only when
 it differs the same way at two frame ends in a row. One such difference is
@@ -244,8 +253,12 @@ approximated by samples and the DSP's ADSR.
    - Every recording matches the Genesis's RAM at the end of every game
      frame, apart from VBlank timing (`make snes-check`).
 4. Next:
-   - The logo and setup speed. The compiled logo is slow, and setups take
-     longer than the Genesis's.
+   - Race speed. Against the real Genesis (gpgx's recordings): logo,
+     title and menus run at about its speed, the demo race at about 90%
+     and races at about 83% (3.3 video frames a race frame, against 2.8).
+     The time is spread out: the road (race_build_road and its divisions,
+     scroll_tables, road_rows), the HDMA tables, the VDP layer's
+     conversions, and the compiled race logic.
    - Sprite slices in busy race scenes.
 5. Sound: an SPC700 driver.
 

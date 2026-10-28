@@ -19,7 +19,8 @@
  * the Genesis RAM), and the SNES gets the same in its game frame.
  * -F, for a test build (make snes SNES_PADLOG=...), dumps the Genesis RAM
  * and VRAM (the BW-RAM's banks $40 and $42) as each game frame ends, to
- * PREFIX_fN.ram and .vram for the Nth:
+ * PREFIX_fN.ram and .vram for the Nth, and the VDP layer's own (bank $41:
+ * the SNES maps) to .maps for every 50th:
  * the build waits there until snesrun has seen its flag (without -F, it
  * goes on).
  * -T writes a line per video frame to TIMING: the frame, the game's frame
@@ -342,8 +343,13 @@ int main(int argc, char **argv)
             char path[512];
             snprintf(path, sizeof path, "%s_f%d.ram", prefix, synced);
             dump(path, bw_mem, 0x10000);
-            snprintf(path, sizeof path, "%s_f%d.vram", prefix, synced++);
+            snprintf(path, sizeof path, "%s_f%d.vram", prefix, synced);
             dump(path, bw_mem + 0x20000, 0x10000);
+            if (synced % 50 == 0) {
+                snprintf(path, sizeof path, "%s_f%d.maps", prefix, synced);
+                dump(path, bw_mem + 0x10000, 0x10000);
+            }
+            synced++;
             ((uint8_t *)bw_mem)[SYNC_FLAG] = 0;
         }
         if (frame < (int)sizeof bwshot && bwshot[frame]) {

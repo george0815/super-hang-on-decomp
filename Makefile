@@ -105,7 +105,7 @@ tools/snes/snesrun: tools/snes/snesrun.c
 # holds the hand-written rest. CCODE1-4 are 64 KB code banks.
 SNES_C_BANK = race:CCODE1 objects:CCODE2 vblank:CCODE4
 # C functions the SNES does its own way (snes/rt.s)
-SNES_C_SKIP = vdp_copy,vdp_copy_rect,vdp_fill,build_sprite_table,nemesis_to_vdp,nemesis_to_ram,scroll_tables,road_rows,race_build_road
+SNES_C_SKIP = vdp_copy,vdp_copy_rect,vdp_fill,write_words,hex_tiles,build_sprite_table,nemesis_to_vdp,nemesis_to_ram,scroll_tables,road_rows,race_build_road
 SNES_TRACE ?=           # 1: compiled functions note their entry (debugging)
 SNES_PROFILE ?=         # 1: the VBlank interrupt samples the SA-1's address
 SNES_PADLOG ?=          # a livetest SHO_PADLOG: the build plays that input
@@ -169,7 +169,8 @@ snes-shots: build/snes/shangon.sfc tools/snes/snesrun
 
 # Each recording (CHECK=names, default all) on the SNES against the native
 # port, the RAM as each game frame ends (tools/snes/framecheck.sh; KEEP=1
-# keeps the dumps in build/framecheck). Leaves a test build in build/snes.
+# keeps the dumps in build/framecheck; the SNES maps checked every 50th
+# frame, tools/snes/mapcheck.py). Leaves a test build in build/snes.
 CHECK ?= $(patsubst tests/inputs/%.txt,%,$(wildcard tests/inputs/*.txt))
 snes-check: build/livetest tools/snes/snesrun
 	@for r in $(CHECK); do MAKE="$(MAKE)" PYTHON="$(PYTHON)" ROM="$(ROM)" tools/snes/framecheck.sh $$r || exit 1; done

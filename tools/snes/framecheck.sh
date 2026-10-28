@@ -28,4 +28,9 @@ ${MAKE:-make} -s snes-shots SNES_PADLOG="$w/pad" PADLOG="$w/pad" FRAMEDUMP=1 \
 find build/snes -maxdepth 1 -name 'shot_f*' -exec mv -t "$w/sn" {} +
 echo "== $name ($n video frames)"
 ${PYTHON:-python3} tools/snes/framecmp.py "$w/mdf" "$w/sn"
+for m in "$w"/sn/*.maps; do               # the SNES maps, every 50th frame
+    [ -e "$m" ] || break
+    r=$(${PYTHON:-python3} tools/snes/mapcheck.py "$m" | tail -n 1)
+    case "$r" in *" 0 wrong") ;; *) echo "  maps $(basename "$m"): $r" ;; esac
+done
 [ -n "$KEEP" ] || rm -rf "$w"

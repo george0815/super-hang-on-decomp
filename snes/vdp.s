@@ -24,7 +24,7 @@
 
 .export vdp_reset, vdp_command, vdp_write, vdp_read, vdp_register
 .export vdp_ctrl_write, vdp_data_write, vdp_data_read, vdp_status
-.export vdp_tiles, vdp_flush, vdp_copy, vdp_copy_rect, vdp_fill
+.export vdp_tiles, vdp_flush, vdp_copy, vdp_copy_rect, vdp_fill, vblank__write_words
 .export vdp_pending, tile_gen, hdma_bufs
 .import upload, upload_vram, upload_fits
 
@@ -106,6 +106,11 @@ rl_last_a   = $84
 rl_last_b   = $86
 rl_gline    = $88
 rl_sc       = $8A       ; BG1SC above the window's edge line, and below
+; upload_rows's (the same: idle then)
+ur_lo       = $8C       ; the row's changed columns
+ur_hi       = $8E
+ur_dst      = $90       ; the map's VRAM address
+ur_src      = $92       ; and its copy (bank of map_a)
 
 .segment "CODE"
 .a16
@@ -153,9 +158,13 @@ vdp_reset:
     bcc :-
     sep #$20
     .a8
-    lda #1
     ldx #0
-:   sta f:rows_a, x
+:   lda #1                  ; every row, every column
+    sta f:rows_a, x
+    lda #0
+    sta f:row_lo, x
+    lda #63
+    sta f:row_hi, x
     inx
     cpx #ROWS_SIZE
     bcc :-
@@ -424,6 +433,9 @@ vdp_copy:
     lda 13, s
     jsr vdp_ctrl_write
     plp
+; write_words(uint32_t src, int count) (vblank.c): the same without the
+; command.
+vblank__write_words:
     lda 10, s               ; the RAM mirror, or the ROM copy
     and #$00FF
     cmp #$00E0
@@ -589,7 +601,11 @@ dv_tile:
     plx
     cpx #PLANE_A
     bcc :+
-    jsr map_word
+    jsr map_word            ; its map row: the tile's last column,
+    txa
+    and #$FFE0
+    tax
+    jsr map_word            ;  and its first (map_word keeps X)
 :   ply
     plx
 @done:
@@ -708,12 +724,7 @@ map_word:
     xba
     and #$003F              ; row = offset >> 7
     tax
-    sep #$20
-    .a8
-    lda #1
-    sta f:rows_a, x
-    rep #$20
-    .a16
+    jsr mark_row
     lda z:map_off
     cmp #WINDOW
     bcc @done
@@ -722,13 +733,10 @@ map_word:
     asl
     xba
     and #$001F
+    clc
+    adc #rows_w - rows_a
     tax
-    sep #$20
-    .a8
-    lda #1
-    sta f:rows_w, x
-    rep #$20
-    .a16
+    jsr mark_row
 @done:
     ldx z:map_off
     rts
@@ -738,14 +746,33 @@ map_word:
     asl
     xba
     and #$003F
+    clc
+    adc #rows_b - rows_a
     tax
+    jsr mark_row
+    ldx z:map_off
+    rts
+
+; Row X (an index in rows_a, then rows_b, rows_w) changed at map_off's
+; column: flagged, and its range of changed columns widened to it.
+mark_row:
+    lda z:map_off
+    and #$007E
+    lsr
     sep #$20
     .a8
+    pha
     lda #1
-    sta f:rows_b, x
-    rep #$20
+    sta f:rows_a, x
+    pla
+    cmp f:row_lo, x
+    bcs :+
+    sta f:row_lo, x
+:   cmp f:row_hi, x
+    bcc :+
+    sta f:row_hi, x
+:   rep #$20
     .a16
-    ldx z:map_off
     rts
 
 ; Byte offset A in a 64-wide Genesis name table -> X = byte offset in the
@@ -1136,17 +1163,30 @@ upload_rows:
     lda f:rows_a, x
     and f:vis_a, x          ; changed, and on screen
     and #$00FF
-    beq @next
-    dec z:budget
-    bmi @done
-    lda #128
+    bne :+
+    jmp @next
+:   dec z:budget
+    bpl :+
+    rts
+:   lda #128
     jsr upload_fits
-    bcc @done
+    bcs :+
+    rts
+:   stz z:ur_lo             ; the changed columns (and none now)
+    stz z:ur_hi
     tyx
     sep #$20
     .a8
     lda #0
     sta f:rows_a, x
+    lda f:row_lo, x
+    sta z:ur_lo
+    lda f:row_hi, x
+    sta z:ur_hi
+    lda #$7F
+    sta f:row_lo, x
+    lda #0
+    sta f:row_hi, x
     rep #$20
     .a16
     tya
@@ -1174,7 +1214,8 @@ upload_rows:
     lda #WINDOW_MAP
     ldx #.loword(map_w)
 @queue:
-    sta z:up_dst
+    sta z:ur_dst
+    stx z:ur_src
     stx z:up_src
     phy
     jsr convert_row
@@ -1183,18 +1224,28 @@ upload_rows:
 @next:
     iny
     cpy #ROWS_SIZE
-    bcc @row
+    bcs @done
+    jmp @row
 @done:
     rts
 
-; Convert row t0 of the name table at row_md into the map at up_src.
+; Convert row t0 of the name table at row_md into the map at up_src:
+; columns ur_lo to ur_hi.
 convert_row:
     lda z:t0
     pha                     ; (map_index uses t0)
     xba
     lsr                     ; row * 128
     sta z:row_off
-    lda #64
+    lda z:ur_lo
+    asl
+    clc
+    adc z:row_off
+    sta z:row_off
+    lda z:ur_hi
+    sec
+    sbc z:ur_lo
+    inc
     sta z:row_left
 @entry:
     lda z:row_md
@@ -1223,8 +1274,9 @@ convert_row:
     sta z:t0
     rts
 
-; Queue row t0 of the map at up_src (VRAM up_dst): its left and right
-; halves, each 32 entries in a different screen.
+; Queue row t0 of the map at ur_src (VRAM ur_dst), columns ur_lo to
+; ur_hi: in the left half (columns 0-31) and the right (32-63), each half
+; in a different screen.
 queue_row:
     lda z:t0
     and #$0020
@@ -1238,29 +1290,62 @@ queue_row:
     asl
     asl
     asl
-    ora z:t1                ; the left half's first entry
+    ora z:t1
+    pha                     ; the left half's first entry
+    lda z:ur_lo
+    cmp #32
+    bcs @right
+    lda z:ur_hi             ; columns ur_lo to min(ur_hi, 31)
+    cmp #32
+    bcc :+
+    lda #31
+:   sec
+    sbc z:ur_lo
+    inc
+    asl
+    sta z:up_len
+    lda 1, s
+    clc
+    adc z:ur_lo
+    jsr queue_part
+@right:
+    lda z:ur_hi
+    cmp #32
+    bcc @done
+    lda z:ur_lo             ; columns max(ur_lo, 32) to ur_hi
+    cmp #32
+    bcs :+
+    lda #32
+:   sta z:t1
+    lda z:ur_hi
+    sec
+    sbc z:t1
+    inc
+    asl
+    sta z:up_len
+    lda 1, s
+    clc
+    adc #1024 - 32          ; (the right screen)
+    clc
+    adc z:t1
+    jsr queue_part
+@done:
+    pla
+    rts
+
+; Upload up_len bytes of the map from entry A (from ur_src, to ur_dst).
+queue_part:
     pha
     clc
-    adc z:up_dst
+    adc z:ur_dst
     sta z:up_dst
     pla
     asl
     clc
-    adc z:up_src
+    adc z:ur_src
     sta z:up_src
     lda #^map_a
     sta z:up_src + 2
-    lda #64
-    sta z:up_len
-    jsr upload_vram
-    lda z:up_dst
-    clc
-    adc #1024
-    sta z:up_dst
-    lda z:up_src
-    clc
-    adc #2048
-    sta z:up_src
     jmp upload_vram
 
 ; The SNES layers and scroll from the VDP registers: display on/off, BG1
@@ -2146,6 +2231,8 @@ tile_dirty:     .res 256 + 1        ; a bit per tile
 rows_a:         .res 64             ; a byte per map row: A, then B, window
 rows_b:         .res 64
 rows_w:         .res 32 + 1
+row_lo:         .res ROWS_SIZE + 1  ; each row's changed columns (row_lo
+row_hi:         .res ROWS_SIZE + 1  ;  above row_hi: none)
 vis_a:          .res 64             ; rows on screen this frame, laid out as
 vis_b:          .res 64             ;  rows_a, rows_b, rows_w
 vis_w:          .res 32 + 1
