@@ -63,8 +63,13 @@ Hand-written 65816 covers:
 - the Genesis VDP layer: ports, DMA, maps, tile slots and HDMA scroll
   (`snes/vdp.s`);
 - the sprite renderer (`snes/sprites.s`);
-- the hot spots that the profiler shows (`snes/road.s`). These replace
+- the hot spots that the profiler shows: the road (`snes/road.s`),
+  `vdp_copy` (vdp.s) and `build_sprite_table` (sprites.s). These replace
   compiled functions of the same name (`SNES_C_SKIP` in the Makefile).
+
+The HDMA tables are rebuilt only when their inputs change, unless the
+vertical scroll is per line (races): the scroll modes, the window, VSRAM
+and the horizontal scroll table are compared with the last build's.
 
 Debug builds:
 - `make snes SNES_TRACE=1` records each compiled function's entry in a
@@ -79,6 +84,10 @@ Debug builds:
   core counts the SA-1's cycles and executions per instruction address
   and writes them at exit. `tools/snes/sa1prof.py file` sums them per
   function, with each function's calls and cycles per call.
+- Speed by game mode: `make snes-shots TIMING=file` (snesrun `-T`) and
+  livetest with `SHO_TIMING=file` log the game's frame count and mode at
+  every video frame; `tools/snes/timing.py SNES [GENESIS]` gives the video
+  frames per game frame of each mode, side by side.
 
 ## Checking the port
 
@@ -103,11 +112,12 @@ build plays a recording by game frame instead:
 each game frame, taken from a native-port pad log (livetest with
 `SHO_PADLOG=file`).
 
-**Frame-end dumps.** Both sides can save the RAM as each game frame ends
-(`wait_frame_ticks`): livetest with `SHO_FRAMEDUMP=dir` writes
-`dir/f_N.ram`, and a `SNES_PADLOG` build run by `make snes-shots
-FRAMEDUMP=1` (snesrun `-F`) writes `build/snes/shot_fN.ram`. The SNES build
-sets a flag at $41DFF0 there and waits until snesrun has dumped bank $40.
+**Frame-end dumps.** Both sides can save the RAM and VRAM as each game
+frame ends (`wait_frame_ticks`): livetest with `SHO_FRAMEDUMP=dir` writes
+`dir/f_N.ram` and `.vram`, and a `SNES_PADLOG` build run by `make
+snes-shots FRAMEDUMP=1` (snesrun `-F`) writes `build/snes/shot_fN.ram` and
+`.vram` (the VDP layer's copy of the Genesis VRAM, bank $42). The SNES
+build sets a flag at $41DFF0 there and waits until snesrun has dumped.
 The Nth dumps pair up exactly.
 
 **Pads by frame.** In a race the pads are read in the first VBlank of each
@@ -127,6 +137,13 @@ recording matches the Genesis at every game frame end, except:
   buffer flip ($FF0580/$FF06C4) now and then;
 - the pad bytes ($FFC706) at the end of a long setup: the Genesis reads
   them at every VBlank of it, the pad table holds one value per game frame.
+
+VRAM is written in the VBlank too, so a VRAM word counts as wrong only when
+it differs the same way at two frame ends in a row. One such difference is
+timing all the same: while the bike is retired, each frame sets the broken
+part count ($FFC896) and then $FFFF again, and the HUD's message at VRAM
+$D2A0 depends on which the VBlank sees, so the SNES blinks the parts text
+where the Genesis blinks the other.
 
 Screens that loop on VBlanks inside one game frame (the password entry) end
 no frames, so they are not compared.

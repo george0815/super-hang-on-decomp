@@ -4,10 +4,13 @@
  *
  * usage: livetest ROM FRAMES INPUT.txt OUTDIR [FRAME]...
  * SHO_MIX=master,music,engine,effects (percent) overrides the sound mix.
- * SHO_FRAMEDUMP=DIR saves the RAM as each game frame ends, to DIR/f_N.ram
- * for the Nth (to compare with the SNES build's, snesrun -F).
+ * SHO_FRAMEDUMP=DIR saves the RAM and VRAM as each game frame ends, to
+ * DIR/f_N.ram and .vram for the Nth (to compare with the SNES build's,
+ * snesrun -F).
  * SHO_FRAMEPADS=1 has race frames read the pads as they start, as the SNES
  * pad-table builds do (test_frame_pads), for pad logs and dumps that match.
+ * SHO_TIMING=FILE writes a line per video frame: the frame, the game's frame
+ * count ($FFC726) and mode ($FFC704), as snesrun -T does (tools/snes/timing.py).
  * SHO_PADLOG=FILE lists the pad as the game reads it, one line per read:
  * the game frame (the main loop's count, $FFC726, carried past 255) and
  * the pad (hex, S A C B R L D U), for driving the SNES build (snesrun -P).
@@ -67,7 +70,7 @@ static void load_script(const char *path)
     fclose(f);
 }
 
-static FILE *padlog;
+static FILE *padlog, *timing;
 static const char *framedump;
 
 static void frame_end(void)
@@ -75,10 +78,16 @@ static void frame_end(void)
     static int n;
     char path[512];
     FILE *f;
-    snprintf(path, sizeof path, "%s/f_%d.ram", framedump, n++);
+    snprintf(path, sizeof path, "%s/f_%d.ram", framedump, n);
     f = fopen(path, "wb");
     if (f) {
         fwrite(m68k_ram, 1, 0x10000, f);
+        fclose(f);
+    }
+    snprintf(path, sizeof path, "%s/f_%d.vram", framedump, n++);
+    f = fopen(path, "wb");
+    if (f) {
+        fwrite(vdp.vram, 1, sizeof vdp.vram, f);
         fclose(f);
     }
 }
@@ -163,8 +172,13 @@ void host_frame(const uint8_t *pixels)
         fwrite(m68k_ram, 1, sizeof m68k_ram, f);
         fclose(f);
     }
-    if (++frame >= frames)
+    if (timing)
+        fprintf(timing, "%d %u %04X\n", frame, m68k_ram[0xC726],
+                m68k_ram[0xC704] << 8 | m68k_ram[0xC705]);
+    if (++frame >= frames) {
+        if (timing) fclose(timing);
         exit(0);
+    }
 }
 
 int main(int argc, char **argv)
@@ -204,6 +218,8 @@ int main(int argc, char **argv)
         framedump = getenv("SHO_FRAMEDUMP");
         frame_end_hook = frame_end;
     }
+    if (getenv("SHO_TIMING"))
+        timing = fopen(getenv("SHO_TIMING"), "w");
     if (getenv("SHO_FRAMEPADS"))
         test_frame_pads = 1;
     if (getenv("SHO_PADLOG"))

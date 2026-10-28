@@ -22,10 +22,10 @@ fi
 SHO_FRAMEPADS=1 SHO_FRAMEDUMP="$w/mdf" SHO_PADLOG="$w/pad" \
     build/livetest "${ROM:-sho.md}" "$n" "$in" "$w/md" > /dev/null
 ${MAKE:-make} -s snes SNES_PADLOG="$w/pad"
-rm -f build/snes/shot_f*.ram
+rm -f build/snes/shot_f*
 ${MAKE:-make} -s snes-shots SNES_PADLOG="$w/pad" PADLOG="$w/pad" FRAMEDUMP=1 \
     INPUT="$in" FRAMES=$((n * 3)) SHOTS= > /dev/null
-find build/snes -maxdepth 1 -name 'shot_f*.ram' -exec mv -t "$w/sn" {} +
+find build/snes -maxdepth 1 -name 'shot_f*' -exec mv -t "$w/sn" {} +
 echo "== $name ($n video frames)"
 ${PYTHON:-python3} tools/snes/framecmp.py "$w/mdf" "$w/sn"
 [ -n "$KEEP" ] || rm -rf "$w"

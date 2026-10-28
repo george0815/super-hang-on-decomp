@@ -31,8 +31,10 @@ UPLOAD_LIST  = $00301A  ; word: the ready upload list (bank $41)
 HDMA_TABLES  = $00301C  ; word: the HDMA tables to show (vdp.s, bank $41)
 
 ; Test builds (PADTABLE): set as a game frame ends; snesrun -F dumps the
-; Genesis RAM and clears it (shangon.cfg keeps the BWRAM segment below)
+; Genesis RAM and clears it (shangon.cfg keeps the BWRAM segment below).
+; SYNC_ON: snesrun -F is there (it sets this at load), so wait for it.
 SYNC_FLAG    = $41DFF0
+SYNC_ON      = $41DFF2
 
 ; The SA-1's direct page and stack are also in I-RAM
 SA1_DP       = $3100

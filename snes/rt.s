@@ -860,10 +860,13 @@ frame_sync_c:
     sei
     sep #$20
     .a8
+    lda f:SYNC_ON
+    beq @off
     lda #1
     sta f:SYNC_FLAG
 :   lda f:SYNC_FLAG
     bne :-
+@off:
     plp
 .endif
     rtl

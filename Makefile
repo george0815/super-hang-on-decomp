@@ -105,7 +105,7 @@ tools/snes/snesrun: tools/snes/snesrun.c
 # holds the hand-written rest. CCODE1-4 are 64 KB code banks.
 SNES_C_BANK = race:CCODE1 objects:CCODE2 vblank:CCODE4
 # C functions the SNES does its own way (snes/rt.s)
-SNES_C_SKIP = nemesis_to_vdp,nemesis_to_ram,scroll_tables,road_rows,race_build_road
+SNES_C_SKIP = vdp_copy,vdp_copy_rect,vdp_fill,build_sprite_table,nemesis_to_vdp,nemesis_to_ram,scroll_tables,road_rows,race_build_road
 SNES_TRACE ?=           # 1: compiled functions note their entry (debugging)
 SNES_PROFILE ?=         # 1: the VBlank interrupt samples the SA-1's address
 SNES_PADLOG ?=          # a livetest SHO_PADLOG: the build plays that input
@@ -124,7 +124,7 @@ build/snes/gen/assets.s build/snes/gen/assets.inc &: tools/snes/assets.py tools/
 # (rewritten only when the options change, so changing them rebuilds the asm)
 build/snes/flags: FORCE
 	@mkdir -p build/snes
-	@echo '$(SNES_ASFLAGS)' | cmp -s - $@ || echo '$(SNES_ASFLAGS)' > $@
+	@echo '$(SNES_ASFLAGS) $(SNES_C_SKIP)' | cmp -s - $@ || echo '$(SNES_ASFLAGS) $(SNES_C_SKIP)' > $@
 
 build/snes/padtable.o: $(SNES_PADLOG) tools/snes/padtable.py
 	$(PYTHON) tools/snes/padtable.py $(SNES_PADLOG) build/snes/gen/padtable.s
@@ -162,9 +162,10 @@ SHOTS  ?= 100 200 300
 BWSHOTS ?=
 PADLOG ?=               # drive the pad by the game's reads (livetest SHO_PADLOG)
 FRAMEDUMP ?=            # 1 (with SNES_PADLOG builds): build/snes/shot_fN.ram as game frame N ends
+TIMING ?=               # file: per video frame, the game frame count and mode
 INPUT  ?= tests/inputs/attract.txt
 snes-shots: build/snes/shangon.sfc tools/snes/snesrun
-	tools/snes/snesrun $(SNESCORE) $< $(FRAMES) -i $(INPUT) $(foreach f,$(SHOTS),-s $(f)) $(foreach f,$(BWSHOTS),-B $(f)) $(if $(PADLOG),-P $(PADLOG)) $(if $(FRAMEDUMP),-F) -o build/snes/shot -w build/snes/wram.bin -b build/snes/bwram.bin -v build/snes/vram.bin
+	tools/snes/snesrun $(SNESCORE) $< $(FRAMES) -i $(INPUT) $(foreach f,$(SHOTS),-s $(f)) $(foreach f,$(BWSHOTS),-B $(f)) $(if $(PADLOG),-P $(PADLOG)) $(if $(FRAMEDUMP),-F) $(if $(TIMING),-T $(TIMING)) -o build/snes/shot -w build/snes/wram.bin -b build/snes/bwram.bin -v build/snes/vram.bin
 
 # Each recording (CHECK=names, default all) on the SNES against the native
 # port, the RAM as each game frame ends (tools/snes/framecheck.sh; KEEP=1

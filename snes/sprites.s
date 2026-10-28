@@ -25,6 +25,7 @@
 .include "gen/assets.inc"
 
 .export sprites_reset, sprites_begin, sprite_object, sprites_end, sprites_hide
+.export objects__build_sprite_table
 .import upload, upload_vram, upload_fits, tile_gen
 
 VRAM_MIRROR = $420000
@@ -223,6 +224,159 @@ queue:
 
 ; Draw the object at X: its frame from the cache (built if need be), then
 ; an OBJ per box.
+; build_sprite_table() (src/game/objects.c, left out of the compiled C):
+; the 97 layer lists into the Genesis sprite table ($FFD100), each object
+; also drawn as SNES OBJs (sprite_object). Returns the sprite count (A, and
+; CHI = 0). The RAM mirror is the data bank.
+SPRITE_TABLE = $D100
+LAYER_LISTS  = $D400
+LAYER_END    = LAYER_LISTS + 97 * $20
+MAX_SPRITES  = 80
+TABLE_DP     = SPRITES_DP + $80     ; its own direct page (past sprites.s's)
+bt_sprite   = $00       ; the next sprite's address
+bt_left     = $02       ; sprites still allowed
+bt_list     = $04
+bt_entries  = $06       ; objects left in the list
+bt_entry    = $08
+bt_obj      = $0A
+bt_map      = $0C       ; 24 bits
+bt_pieces   = $10       ; pieces left after this one
+bt_y0       = $12
+bt_x0       = $14
+bt_tile0    = $16
+
+objects__build_sprite_table:
+    phd
+    pea TABLE_DP
+    pld
+    lda #SPRITE_TABLE
+    sta z:bt_sprite
+    lda #MAX_SPRITES
+    sta z:bt_left
+    lda #LAYER_LISTS
+    sta z:bt_list
+@list:
+    ldx z:bt_list
+    lda a:0, x
+    bne :+
+    jmp @next_list
+:   stz a:0, x              ; (emptied as it is read)
+    xba
+    cmp #$8000              ; objects: count >> 1 (signed)
+    ror
+    beq :+
+    bpl :++
+:   jmp @next_list
+:   sta z:bt_entries
+    inx
+    inx
+    stx z:bt_entry
+@entry:
+    ldx z:bt_entry
+    ldw 0, x
+    sta z:bt_obj
+    tax
+    lda a:OBJ_SPRITE_MAP, x
+    bne :+
+    jmp @next_entry
+:   jsr sprite_object
+    ldx z:bt_obj
+    ldw OBJ_SPRITE_MAP, x
+    sta z:bt_map
+    cmp #$8000
+    lda #^MDROM
+    bcc :+
+    lda #^MIRROR
+:   sta z:bt_map + 2
+    lda [bt_map]
+    xba
+    sta z:bt_pieces
+    ldw OBJ_SCREEN_Y, x
+    sta z:bt_y0
+    ldw OBJ_SCREEN_X, x
+    sta z:bt_x0
+    ldw OBJ_TILE_BASE, x
+    sta z:bt_tile0
+    ldy #2
+@piece:
+    ldx z:bt_sprite
+    lda [bt_map], y         ; y offset (byte, from -256), size
+    pha
+    and #$00FF
+    ora #$FF00
+    clc
+    adc z:bt_y0
+    xba
+    sta a:0, x
+    pla
+    xba
+    sep #$20
+    .a8
+    sta a:2, x
+    rep #$20
+    .a16
+    iny
+    iny
+    lda [bt_map], y         ; tile
+    xba
+    clc
+    adc z:bt_tile0
+    xba
+    sta a:4, x
+    iny
+    iny
+    lda [bt_map], y         ; x offset
+    xba
+    clc
+    adc z:bt_x0
+    xba
+    sta a:6, x
+    xba
+    iny
+    iny
+    sec                     ; kept if $5F <= x < $1BF (signed)
+    sbc #$005F
+    cmp #$0160
+    bcs @dropped
+    txa
+    clc
+    adc #8
+    sta z:bt_sprite
+    dec z:bt_left
+    beq @full
+@dropped:
+    lda z:bt_pieces
+    beq @next_entry
+    dec z:bt_pieces
+    bra @piece
+@next_entry:
+    lda z:bt_entry
+    inc
+    inc
+    sta z:bt_entry
+    dec z:bt_entries
+    beq @next_list
+    jmp @entry
+@next_list:
+    lda z:bt_list
+    clc
+    adc #$20
+    sta z:bt_list
+    cmp #LAYER_END
+    bcs :+
+    jmp @list
+:   lda #MAX_SPRITES
+    sec
+    sbc z:bt_left
+    bra @done
+@full:
+    lda #MAX_SPRITES
+@done:
+    pld
+    ldx #0
+    stx z:CHI
+    rtl
+
 sprite_object:
     enter
     stx z:obj

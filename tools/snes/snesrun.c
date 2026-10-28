@@ -4,7 +4,7 @@
  *
  * usage: snesrun CORE.so ROM FRAMES [-i SCRIPT] [-s FRAME]... [-o PREFIX]
  *                [-w WRAM.bin] [-b BWRAM.bin] [-v VRAM.bin] [-B FRAME]...
- *                [-P PADLOG] [-F]
+ *                [-P PADLOG] [-F] [-T TIMING]
  *
  * The script has the Genesis tools' format (tests/inputs/NAME.txt): lines of
  * "FIRST LAST BUTTONS" with buttons from UDLRABCS. The Genesis pad maps to
@@ -18,8 +18,12 @@
  * game frame (the main loop's count at $FFC726, in the BW-RAM's mirror of
  * the Genesis RAM), and the SNES gets the same in its game frame.
  * -F, for a test build (make snes SNES_PADLOG=...), dumps the Genesis RAM
- * (BW-RAM bank $40) as each game frame ends, to PREFIX_fN.ram for the Nth:
- * the build waits there until snesrun has seen its flag.
+ * and VRAM (the BW-RAM's banks $40 and $42) as each game frame ends, to
+ * PREFIX_fN.ram and .vram for the Nth:
+ * the build waits there until snesrun has seen its flag (without -F, it
+ * goes on).
+ * -T writes a line per video frame to TIMING: the frame, the game's frame
+ * count ($FFC726) and its game mode ($FFC704), from the BW-RAM's mirror.
  */
 #include <dlfcn.h>
 #include <stdarg.h>
@@ -70,6 +74,7 @@ static void load_script(const char *path)
 #define FRAME_COUNTER 0xC726                /* $FFC726 in the RAM mirror */
 #define RAM_SIGNATURE 0x0000                /* $FF0000: "init" once reset() ran */
 #define SYNC_FLAG 0x1DFF0                   /* $41DFF0 (snes/inc/mem.inc) */
+#define SYNC_ON 0x1DFF2                     /* $41DFF2: -F is on */
 static uint16_t *padlog;
 static unsigned *padlog_frame;
 static int npadlog, padlog_at;
@@ -233,6 +238,7 @@ int main(int argc, char **argv)
     static char shot[1 << 20], bwshot[1 << 20];
     int frames, sync = 0, synced = 0;
     const char *prefix = "shot", *wram = NULL, *bwram = NULL, *vram = NULL;
+    FILE *timing = NULL;
     struct retro_game_info game = { 0 };
     void *core;
     FILE *f;
@@ -274,6 +280,10 @@ int main(int argc, char **argv)
             }
             fclose(pf);
         }
+        else if (!strcmp(argv[k], "-T")) {
+            timing = fopen(argv[k + 1], "w");
+            if (!timing) { perror(argv[k + 1]); return 1; }
+        }
         else if (!strcmp(argv[k], "-w")) wram = argv[k + 1];
         else if (!strcmp(argv[k], "-b")) bwram = argv[k + 1];
         else if (!strcmp(argv[k], "-v")) vram = argv[k + 1];
@@ -306,8 +316,10 @@ int main(int argc, char **argv)
     retro_set_input_state(input_state);
     if (!retro_load_game(&game)) { fprintf(stderr, "the core rejected %s\n", argv[2]); return 1; }
     bw_mem = retro_get_memory_data(RETRO_MEMORY_SAVE_RAM);
-    if (sync && bw_mem)
-        ((uint8_t *)bw_mem)[SYNC_FLAG] = 0;   /* (the BW-RAM starts filled) */
+    if (bw_mem) {                       /* (the BW-RAM starts filled) */
+        ((uint8_t *)bw_mem)[SYNC_FLAG] = 0;
+        ((uint8_t *)bw_mem)[SYNC_ON] = sync;
+    }
 
     for (frame = 0; frame < frames; frame++) {
         if (padlog && bw_mem && !memcmp(bw_mem + RAM_SIGNATURE, "init", 4)) {
@@ -323,10 +335,15 @@ int main(int argc, char **argv)
                 padlog_at++;
         }
         retro_run();
+        if (timing && bw_mem)
+            fprintf(timing, "%d %u %04X\n", frame, bw_mem[FRAME_COUNTER],
+                    bw_mem[0xC704] << 8 | bw_mem[0xC705]);
         if (sync && bw_mem[SYNC_FLAG]) {
             char path[512];
-            snprintf(path, sizeof path, "%s_f%d.ram", prefix, synced++);
+            snprintf(path, sizeof path, "%s_f%d.ram", prefix, synced);
             dump(path, bw_mem, 0x10000);
+            snprintf(path, sizeof path, "%s_f%d.vram", prefix, synced++);
+            dump(path, bw_mem + 0x20000, 0x10000);
             ((uint8_t *)bw_mem)[SYNC_FLAG] = 0;
         }
         if (frame < (int)sizeof bwshot && bwshot[frame]) {

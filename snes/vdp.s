@@ -24,7 +24,7 @@
 
 .export vdp_reset, vdp_command, vdp_write, vdp_read, vdp_register
 .export vdp_ctrl_write, vdp_data_write, vdp_data_read, vdp_status
-.export vdp_tiles, vdp_flush
+.export vdp_tiles, vdp_flush, vdp_copy, vdp_copy_rect, vdp_fill
 .export vdp_pending, tile_gen, hdma_bufs
 .import upload, upload_vram, upload_fits
 
@@ -54,8 +54,7 @@ UPLOAD_ROWS  = 48               ; and map rows
 vdp_addr    = $40       ; VRAM/CRAM/VSRAM address
 vdp_code    = $42       ; 1 VRAM write, 3 CRAM write, 5 VSRAM write, 0 VRAM read
 next_slot   = $44       ; next free background slot
-cmd_hi      = $46       ; arguments of vdp_copy, vdp_fill, vdp_copy_rect: the
-cmd_lo      = $6C       ; command's high and low words
+cmd_hi      = $46       ; vdp_command: the command's high word
 entry       = $48
 map_off     = $4A
 ptr         = $4C       ; 24 bits
@@ -95,8 +94,18 @@ row_off     = $A6       ;  the entry's offset in it,
 row_left    = $A8       ;  entries left
 hs_ptr      = $AA       ; hdma_build: the horizontal scroll table (24 bits)
 hfast       = $AE       ;  and whether the race's per-line form is in use
-last_tile   = $B6       ; dma_vram: the tile it marked last (it runs in the
+dv_changed  = $B6       ; dma_vram: words of the tile changed (it runs in the
                         ;  VBlank interrupt: past race_build_road's $80-$B5)
+vofs_a      = $B8       ; hdma_build with whole-screen vertical scroll: the
+vofs_b      = $BA       ;  layers' VOFS values, and that form's use
+vconst      = $BC
+; race_lines's (road.s's $80-$8F: idle while the HDMA tables are built)
+rl_count    = $80
+rl_v        = $82
+rl_last_a   = $84
+rl_last_b   = $86
+rl_gline    = $88
+rl_sc       = $8A       ; BG1SC above the window's edge line, and below
 
 .segment "CODE"
 .a16
@@ -116,6 +125,8 @@ vdp_reset:
     stz z:ctrl_pending
     stz z:fill_pending
     stz z:hdma_cur
+    lda #0
+    sta f:hdma_valid
     lda #1
     sta z:vdp_on
     lda #0
@@ -378,6 +389,8 @@ dma_copy:
 :   clc
     adc #^MDROM
 :   sta z:dma_src + 2
+; (vdp_copy too) dma_left words from dma_src through the data port.
+dma_words:
     lda z:vdp_code          ; to VRAM a word at a time: dma_vram
     cmp #1
     bne @word
@@ -398,55 +411,189 @@ dma_copy:
     bne @word
     rts
 
-; dma_copy's usual case: to VRAM with an increment of 2. vram_word's work,
-; comparing the words as stored (big-endian) and marking each tile once.
+; vdp_copy(uint32_t command, uint32_t src, int count) (src/game/video.c,
+; left out of the compiled C): the command, then count words from src
+; through the data port, as a DMA would send them, 64 at a time with the
+; interrupt masked. The arguments' slots keep what is left: count at 4, s,
+; the words in this round at 6, s, the source (as a SNES address) at 8, s.
+vdp_copy:
+    php
+    sei
+    lda 15, s               ; the command, high word first
+    jsr vdp_ctrl_write
+    lda 13, s
+    jsr vdp_ctrl_write
+    plp
+    lda 10, s               ; the RAM mirror, or the ROM copy
+    and #$00FF
+    cmp #$00E0
+    bcc :+
+    lda #^MIRROR
+    bra :++
+:   clc
+    adc #^MDROM
+:   sta 10, s
+@round:
+    lda 4, s
+    beq @done
+    cmp #65
+    bcc :+
+    lda #64
+:   sta 6, s
+    eor #$FFFF
+    sec
+    adc 4, s
+    sta 4, s
+    php
+    sei
+    lda 7, s
+    sta z:dma_left
+    lda 9, s
+    sta z:dma_src
+    lda 11, s
+    sta z:dma_src + 2
+    jsr dma_words
+    plp
+    lda 6, s                ; past this round's words
+    asl
+    clc
+    adc 8, s
+    sta 8, s
+    lda 10, s
+    adc #0
+    sta 10, s
+    bra @round
+@done:
+    rtl
+
+; vdp_copy_rect(uint32_t command, uint32_t src, int width, int height)
+; (video.c): vdp_copy for each row, each a plane row (128 bytes) below the
+; last, the source going on. (Each six pushes of 18, s copy the command,
+; the source and the width as vdp_copy's arguments.)
+vdp_copy_rect:
+@row:
+    lda 4, s                ; rows left
+    beq @done
+    dec
+    sta 4, s
+.repeat 6
+    lda 18, s
+    pha
+.endrep
+    jsl vdp_copy
+    tsc
+    clc
+    adc #12
+    tcs
+    lda 8, s                ; the source past the row
+    asl
+    clc
+    adc 12, s
+    sta 12, s
+    lda 14, s
+    adc #0
+    sta 14, s
+    lda 18, s               ; the command a row down
+    clc
+    adc #$0080
+    sta 18, s
+    bra @row
+@done:
+    rtl
+
+; vdp_fill(uint32_t command, uint16_t value, int count) (video.c): the
+; command, then the value count times through the data port, 64 at a time
+; with the interrupt masked (count at 4, s, this round's at 6, s).
+vdp_fill:
+    php
+    sei
+    lda 13, s
+    jsr vdp_ctrl_write
+    lda 11, s
+    jsr vdp_ctrl_write
+    plp
+@round:
+    lda 4, s
+    beq @done
+    cmp #65
+    bcc :+
+    lda #64
+:   sta 6, s
+    eor #$FFFF
+    sec
+    adc 4, s
+    sta 4, s
+    php
+    sei
+:   lda 9, s
+    jsr vdp_data_write
+    lda 7, s
+    dec
+    sta 7, s
+    bne :-
+    plp
+    bra @round
+@done:
+    rtl
+
+; dma_copy's usual case: to VRAM with an increment of 2. vram_word's work
+; a tile (16 words) at a time: the words compared as stored (big-endian)
+; and copied, then the tile marked changed, and its map row, if any were.
 dma_vram:
     ldx z:vdp_addr
     ldy #0
-    lda #$FFFF
-    sta z:last_tile
+    stz z:dv_changed
 @word:
     lda [dma_src], y
     cmp f:VRAM_MIRROR, x
-    bne @changed
-@next:
-    iny
+    beq :+
+    sta f:VRAM_MIRROR, x
+    inc z:dv_changed
+:   iny
     iny
     inx
     inx
     dec z:dma_left
+    beq @last
+    txa
+    and #$001F
     bne @word
+    jsr dv_tile             ; a tile done
+    bra @word
+@last:
+    jsr dv_tile
     stx z:vdp_addr
     tya
     clc
     adc z:dma_src
     sta z:dma_src
     rts
-@changed:
-    sta f:VRAM_MIRROR, x
+
+; dma_vram: mark the tile before address X, if it changed.
+dv_tile:
+    lda z:dv_changed
+    beq @done
+    stz z:dv_changed
+    phx
     phy
-    phx
-    xba
-    pha
     txa
+    dec
+    dec
+    pha
     lsr
     lsr
     lsr
     lsr
     lsr
-    cmp z:last_tile
-    beq :+
-    sta z:last_tile
     jsr mark_tile
-:   pla
     plx
-    phx
     cpx #PLANE_A
     bcc :+
     jsr map_word
-:   plx
-    ply
-    bra @next
+:   ply
+    plx
+@done:
+    rts
 
 ; A DMA fill (the game only fills with 0): the length's bytes plus one
 ; from the address, zeroed.
@@ -696,101 +843,6 @@ entry_attributes:
 .endrep
 
 ; --------------------------------------------------------- bulk helpers
-
-; ptr (24 bits) from a Genesis address in A (high word) and X (low):
-; RAM ($FFxxxx) is the mirror, the rest the ROM copy. Both are
-; big-endian.
-source:
-    cmp #$00FF
-    bne :+
-    stx z:ptr
-    lda #^MIRROR
-    sta z:ptr + 2
-    rts
-:   clc
-    adc #^MDROM
-    sta z:ptr + 2
-    stx z:ptr
-    rts
-
-; Copy Y words from the Genesis address A:X (high and low words) to the
-; VDP, after the command in cmd_hi/cmd_lo ($83DC).
-vdp_copy:
-    sty z:count
-    jsr source
-    lda z:cmd_hi
-    ldx z:cmd_lo
-    jsr vdp_command
-    ldy #0
-:   lda [ptr], y
-    xba
-    phy
-    jsr vdp_write
-    ply
-    iny
-    iny
-    dec z:count
-    bne :-
-    rts
-
-; Write the word A Y times after the command in cmd_hi/cmd_lo.
-vdp_fill:
-    pha
-    sty z:count
-    lda z:cmd_hi
-    ldx z:cmd_lo
-    jsr vdp_command
-:   lda 1, s
-    jsr vdp_write
-    dec z:count
-    bne :-
-    pla
-    rts
-
-; Copy a width x rows block of name table entries from the Genesis
-; address A:X, each row 128 bytes below the last ($840E). The command is
-; in cmd_hi/cmd_lo.
-vdp_copy_rect:
-    jsr source
-    lda z:cmd_hi
-    ldx z:cmd_lo
-    jsr vdp_command
-    ldy #0
-@row:
-    lda z:vdp_addr
-    pha
-    lda z:width
-    sta z:count
-:   lda [ptr], y
-    xba
-    phy
-    jsr vdp_write
-    ply
-    iny
-    iny
-    dec z:count
-    bne :-
-    pla
-    clc
-    adc #128
-    sta z:vdp_addr
-    dec z:rows
-    bne @row
-    rts
-
-; Zero A bytes of VRAM from address X (a DMA fill with 0).
-vdp_clear:
-    sta z:count
-:   lda #0
-    phx
-    jsr vram_word
-    plx
-    inx
-    inx
-    dec z:count
-    dec z:count
-    bne :-
-    rts
 
 ; Load tiles into VRAM at the current address: Y tiles in Genesis format
 ; at A:X (24 bits; the build's decoded Nemesis data).
@@ -1256,9 +1308,6 @@ VSCROLL_LINES = $1500
 SCROLL_BUFFER_SEL = $0580
 
 hdma_build:
-    lda z:hdma_cur          ; the set not shown now
-    eor #HDMA_BUF
-    sta z:hdma_cur
     ; the window's lines: from the top (or bottom) to row R
     lda z:VDP_REGS + 18
     and #$001F
@@ -1284,15 +1333,29 @@ hdma_build:
 :   lda z:VDP_REGS + 11
     and #$0003
     sta z:hs_mode
-    stz z:hfast             ; per-line scroll both ways: line_fast
-    cmp #3
-    bne :+
-    lda z:vs_table
-    sta z:hfast
+    lda z:vs_table          ; one vertical scroll and nothing changed:
+    bne :+                  ;  the tables shown stay
+    jsr hdma_same
+    bcc :+
+    rts
+:   lda z:hdma_cur          ; the set not shown now
+    eor #HDMA_BUF
+    sta z:hdma_cur
+    stz z:hfast             ; per-line scroll both ways: race_lines
+    stz z:vconst
     lda #HSCROLL
     sta z:hs_ptr
     lda #^VRAM_MIRROR
     sta z:hs_ptr + 2
+    lda z:vs_table
+    bne :+
+    inc z:vconst            ; one vertical scroll: line_vconst
+    bra :++
+:   lda z:hs_mode
+    cmp #3
+    bne :+
+    lda z:vs_table
+    sta z:hfast
 :   ldx #0                  ; no rows on screen yet
     lda #0
 :   sta f:vis_a, x
@@ -1300,6 +1363,10 @@ hdma_build:
     inx
     cpx #ROWS_SIZE
     bcc :-
+    lda z:vconst
+    beq :+
+    jsr vconst_setup
+:
     ; headers: 112 and 113 lines, one entry each
     ldx z:hdma_cur
     sep #$20
@@ -1319,15 +1386,20 @@ hdma_build:
     sta z:hofs              ; and the next scroll entries (BG2's OFS_SIZE on)
 hdma_line:
     lda z:hline
-    beq :+
-    ldx z:hfast
-    beq @dec
+    beq @first
     cmp #2
     bcc @dec
-    jmp line_fast
+    ldx z:vconst
+    beq @race
+    jmp line_vconst
+@race:
+    ldx z:hfast
+    beq @dec
+    jmp race_lines
 @dec:
     dec                     ; the Genesis line
-:   sta z:gline
+@first:
+    sta z:gline
     ; BG1: the window, or plane A
     jsr in_window
     bcc @plane_a
@@ -1419,9 +1491,10 @@ hdma_next:
     inc z:hofs
 :   lda z:hline
     cmp #HDMA_LINES
-    beq :+
+    beq hdma_ends
     jmp hdma_line
-:   ldx z:hsc               ; the ends
+hdma_ends:
+    ldx z:hsc               ; the ends
     sep #$20
     .a8
     lda #0
@@ -1435,15 +1508,389 @@ hdma_next:
     sta f:HDMA_TABLES
     rts
 
-; A line from the second on with both scrolls per line (races): the
-; general case's work in a line, A = hline.
-line_fast:
+; The race's lines from the second on (per-line scroll both ways): the
+; general case's work, a table at a time. hsc and hofs: line 2's entries.
+race_lines:
+    ; the BG1SC bytes: the window on one side of its edge line
+    lda z:win_down
+    bne :+
+    lda #((WINDOW_MAP >> 10 << 2) | 1) | (((PLANE_A_MAP >> 10 << 2) | 3) << 8)
+    bra :++
+:   lda #((PLANE_A_MAP >> 10 << 2) | 3) | (((WINDOW_MAP >> 10 << 2) | 1) << 8)
+:   sta z:rl_sc
+    ldx z:hsc
+    ldy #1                  ; the Genesis line
+    sep #$20
+    .a8
+@sc:
+    lda z:rl_sc
+    cpy z:win_end
+    bcc :+
+    lda z:rl_sc + 1
+:   sta f:hdma_bufs, x
+    inx
+    iny
+    cpy #111                ; after line 110 (the SNES's 111): the second header
+    bne :+
+    lda #$80 | (HDMA_LINES - 112)
+    sta f:hdma_bufs, x
+    inx
+:   cpy #224
+    bcc @sc
+    rep #$20
+    .a16
+    stx z:hsc
+    ; the window's rows on screen
+    lda z:win_end
+    cmp #224
+    bcc :+
+    lda #224
+:   ldx z:win_down
+    bne @bottom
+    ldy #1                  ; lines 1 up to the edge
+    bra @mark
+@bottom:
+    tay                     ; lines from the edge (at least 1) to 224
+    bne :+
+    ldy #1
+:   lda #224
+@mark:
+    php
+    sei                     ; (mark_window's t0: the interrupt's VDP code)
+    jsr mark_window
+    plp
+    ; the scroll entries, with the second header between
+    lda #$FFFF
+    sta z:rl_last_a
+    sta z:rl_last_b
+    lda #1
+    sta z:rl_gline
+    ldx z:hofs
+    ldy #4
+    lda #110
+    sta z:rl_count
+    jsr race_offsets
+    sep #$20
+    .a8
+    lda #$80 | (HDMA_LINES - 112)
+    sta f:hdma_bufs, x
+    sta f:hdma_bufs + OFS_SIZE, x
+    rep #$20
+    .a16
+    inx
+    lda #113
+    sta z:rl_count
+    jsr race_offsets
+    stx z:hofs
+    jmp hdma_ends
+
+; rl_count lines' BG1 and BG2 scroll entries from X (rl_gline: the first
+; line's number, Y its offset in both scroll tables).
+race_offsets:
+@line:
+    lda z:rl_gline
+    cmp z:win_end
+    lda z:win_down
+    bne :+
+    bcc @window
+    bra @plane_a
+:   bcs @window
+@plane_a:
+    lda [hs_ptr], y
+    xba
+    eor #$FFFF
+    sec
+    adc #CROP
+    and #$03FF
+    sta f:hdma_bufs, x
+    lda (vs_table), y
+    xba
+    sta z:rl_v
+    dec
+    and #$03FF
+    sta f:hdma_bufs + 2, x
+    lda z:rl_v              ; the row on screen (once per row)
+    clc
+    adc z:rl_gline
+    and #$01F8
+    cmp z:rl_last_a
+    beq @plane_b
+    sta z:rl_last_a
+    phx
+    lsr
+    lsr
+    lsr
+    tax
+    sep #$20
+    .a8
+    lda #1
+    sta f:vis_a, x
+    rep #$20
+    .a16
+    plx
+    bra @plane_b
+@window:
+    lda #CROP
+    sta f:hdma_bufs, x
+    lda #$FFFF
+    sta f:hdma_bufs + 2, x
+@plane_b:
+    iny
+    iny
+    lda [hs_ptr], y
+    xba
+    eor #$FFFF
+    sec
+    adc #CROP
+    and #$03FF
+    sta f:hdma_bufs + OFS_SIZE, x
+    lda (vs_table), y
+    xba
+    sta z:rl_v
+    dec
+    and #$03FF
+    sta f:hdma_bufs + OFS_SIZE + 2, x
+    lda z:rl_v
+    clc
+    adc z:rl_gline
+    and #$01F8
+    cmp z:rl_last_b
+    beq :+
+    sta z:rl_last_b
+    phx
+    lsr
+    lsr
+    lsr
+    tax
+    sep #$20
+    .a8
+    lda #1
+    sta f:vis_b, x
+    rep #$20
+    .a16
+    plx
+:   iny
+    iny
+    inx
+    inx
+    inx
+    inx
+    inc z:rl_gline
+    dec z:rl_count
+    beq :+
+    jmp @line
+:   rts
+
+; Are hdma_build's inputs (with one vertical scroll per layer) those of
+; the last build? Carry set if so; if not, they are noted for next time.
+hdma_same:
+    lda f:hdma_valid
+    beq @changed
+    lda z:VDP_REGS
+    cmp f:hdma_sig
+    bne @changed
+    lda z:VDP_REGS + 10
+    cmp f:hdma_sig + 2
+    bne @changed
+    lda z:VDP_REGS + 18
+    cmp f:hdma_sig + 4
+    bne @changed
+    ldw VBLANK_HANDLER
+    cmp f:hdma_sig + 6
+    bne @changed
+    lda f:vsram
+    cmp f:hdma_sig + 8
+    bne @changed
+    lda f:vsram + 2
+    cmp f:hdma_sig + 10
+    bne @changed
+    ldx #HS_BYTES - 2
+:   lda f:VRAM_MIRROR + HSCROLL, x
+    cmp f:hs_copy, x
+    bne @changed
+    dex
+    dex
+    bpl :-
+    sec
+    rts
+@changed:
+    lda z:VDP_REGS
+    sta f:hdma_sig
+    lda z:VDP_REGS + 10
+    sta f:hdma_sig + 2
+    lda z:VDP_REGS + 18
+    sta f:hdma_sig + 4
+    ldw VBLANK_HANDLER
+    sta f:hdma_sig + 6
+    lda f:vsram
+    sta f:hdma_sig + 8
+    lda f:vsram + 2
+    sta f:hdma_sig + 10
+    ldx #HS_BYTES - 2
+:   lda f:VRAM_MIRROR + HSCROLL, x
+    sta f:hs_copy, x
+    dex
+    dex
+    bpl :-
+    lda #1
+    sta f:hdma_valid
+    clc
+    rts
+
+; Whole-screen vertical scroll: the VOFS values, and the rows on screen
+; marked once (lines 0-223) rather than line by line. (With the interrupt
+; masked: its VDP code shares t0-tile.)
+vconst_setup:
+    php
+    sei
+    jsr vconst_marks
+    plp
+    rts
+vconst_marks:
+    lda f:vsram
+    pha
+    dec
+    and #$03FF
+    sta z:vofs_a
+    lda f:vsram + 2
+    pha
+    dec
+    and #$03FF
+    sta z:vofs_b
+    ; the window's lines, and plane A's on the others
+    lda z:win_end
+    cmp #224
+    bcc :+
+    lda #224
+:   sta z:t1                ; the window's edge line, at most 224
+    plx                     ; plane B: every line
+    lda #vis_b - vis_a
+    ldy #0
+    jsr mark_range_224
+    lda z:win_down
+    bne @bottom
+    lda z:t1                ; window above the edge, plane A below
+    ldy #0
+    jsr mark_window
+    plx
+    lda z:t1
+    tay
+    lda #224
+    bra @a
+@bottom:
+    lda #224                ; plane A above the edge, window below
+    ldy z:t1
+    jsr mark_window
+    plx
+    ldy #0
+    lda z:t1
+@a: sta z:t0                ; plane A: lines Y up to A, scroll X
+    tya
+    cmp z:t0
+    bcs @done
+    lda z:t0
+    sta z:count
+    lda #0
+    jmp mark_range
+@done:
+    rts
+
+; vis_w for Genesis lines Y up to A.
+mark_window:
+    sta z:t0
+    tya
+    cmp z:t0
+    bcs @done
+    lsr
+    lsr
+    lsr
+    tax
+    lda z:t0
+    dec
+    lsr
+    lsr
+    lsr
+    sta z:t0
+    sep #$20
+    .a8
+    lda #1
+:   sta f:vis_w, x
+    inx
+    cpx z:t0
+    bcc :-
+    beq :-
+    rep #$20
+    .a16
+@done:
+    rts
+
+; Mark the rows lines Y up to 224 show with vertical scroll X, in the table
+; at vis_a + A.
+mark_range_224:
+    pha
+    lda #224
+    sta z:count
+    pla
+; (the same up to line count)
+mark_range:
+    sta z:t0                ; the table's offset
+    txa                     ; first row: (scroll + Y) / 8
+    sta z:width
+    clc
+    tya
+    adc z:width
+    and #$01F8
+    lsr
+    lsr
+    lsr
+    sta z:rows
+    lda z:count             ; last row: (scroll + count - 1) / 8
+    dec
+    clc
+    adc z:width
+    and #$01F8
+    lsr
+    lsr
+    lsr
+    sta z:tile
+    lda z:rows
+@row:
+    clc
+    adc z:t0
+    tax
+    sep #$20
+    .a8
+    lda #1
+    sta f:vis_a, x
+    rep #$20
+    .a16
+    lda z:rows
+    cmp z:tile
+    beq @done
+    inc
+    and #$003F
+    sta z:rows
+    bra @row
+@done:
+    rts
+
+; A line from the second on with one vertical scroll per layer, A = hline:
+; its horizontal scroll per the mode, the window or plane A.
+line_vconst:
     dec
     sta z:gline
+    ldx z:hs_mode
+    beq @whole
+    cpx #2
+    bne :+
+    and #$FFF8              ; per 8 lines
+:   asl
     asl
-    asl
-    tay                     ; the line's scroll entries
-    lda z:gline
+    tay
+    bra :+
+@whole:
+    ldy #0
+:   lda z:gline
     cmp z:win_end
     lda z:win_down
     bne :+
@@ -1466,38 +1913,12 @@ line_fast:
     and #$03FF
     ldx z:hofs
     sta f:hdma_bufs, x
-    lda (vs_table), y
-    xba
-    pha
-    clc
-    adc z:gline
-    and #$01F8
-    lsr
-    lsr
-    lsr
-    tax
-    sep #$20
-    .a8
-    lda #1
-    sta f:vis_a, x
-    rep #$20
-    .a16
-    pla
-    dec
-    and #$03FF
-    ldx z:hofs
+    lda z:vofs_a
     sta f:hdma_bufs + 2, x
     bra @plane_b
 @window:
-    lda z:gline
-    lsr
-    lsr
-    lsr
-    tax
     sep #$20
     .a8
-    lda #1
-    sta f:vis_w, x
     lda #(WINDOW_MAP >> 10 << 2) | 1
     ldx z:hsc
     sta f:hdma_bufs, x
@@ -1519,26 +1940,7 @@ line_fast:
     and #$03FF
     ldx z:hofs
     sta f:hdma_bufs + OFS_SIZE, x
-    lda (vs_table), y
-    xba
-    pha
-    clc
-    adc z:gline
-    and #$01F8
-    lsr
-    lsr
-    lsr
-    tax
-    sep #$20
-    .a8
-    lda #1
-    sta f:vis_b, x
-    rep #$20
-    .a16
-    pla
-    dec
-    and #$03FF
-    ldx z:hofs
+    lda z:vofs_b
     sta f:hdma_bufs + OFS_SIZE + 2, x
     jmp hdma_next
 
@@ -1727,6 +2129,10 @@ level:
 
 .segment "BWRAM"
 hdma_bufs:      .res 2 * HDMA_BUF
+HS_BYTES = 224 * 4
+hdma_valid:     .res 2              ; hdma_same: the inputs below are set,
+hdma_sig:       .res 12             ;  registers 0, 10-11, 18, the VBlank
+hs_copy:        .res HS_BYTES       ;  handler, VSRAM, the scroll table
 cram:           .res 128
 cgram_buffer:   .res 128
 PENDING_SIZE = 2048
