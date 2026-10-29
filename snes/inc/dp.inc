@@ -16,6 +16,7 @@ VDP_CMD_FIRST = $74
 VDP_FILL_PENDING = $76
 VDP_REGS    = $C0       ; the Genesis VDP's registers 0-23 (vdp.s)
 up_list     = $12       ; the upload list being built (bank $41 address)
+up_count    = $14       ; upload lists handed to the NMI so far (sa1.s)
 
 ; the compiled code's temporaries (tools/snes/c816.py); rt.s uses $F0-$FF
 CHI         = $E0       ; high word of 32-bit values
@@ -24,3 +25,4 @@ CT1         = $E4
 CT2         = $E6
 CPTR        = $E8       ; 24-bit pointer
 CT3         = $EC
+SOFT_MATH   = $EE       ; nonzero: no SA-1 arithmetic (compiled code on the S-CPU)

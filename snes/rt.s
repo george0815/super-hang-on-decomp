@@ -20,7 +20,11 @@
 .export rt_divu16, rt_modu16, rt_divs32, rt_divu32, rt_mods32, rt_modu32
 .export rt_get_sr, rt_set_sr, rt_idle, rt_fault, rt_call_ptr
 .export rt_vdp_data16, rt_vdp_data32, rt_vdp_ctrl16, rt_vdp_ctrl32
-.export trace_ring, trace_pos, pad_frames, pad_last
+.export pad_frames, pad_last, z80_mailbox, z80_ram, dsp_queue
+.import sound_reset_line, sound_poked
+.ifdef TRACE
+.export trace_ring, trace_pos
+.endif
 .export nemesis_to_vdp, nemesis_to_ram, memset, f_divs, f_divu, set_dn, f_logic, hex_tiles
 .export sprites_begin_c, sprite_object_c, sprites_end_c, sprites_hide_c, vdp_flush_c, frame_sync_c
 .import vdp_ctrl_write, vdp_data_write, vdp_data_read, vdp_status, vdp_tiles
@@ -326,6 +330,8 @@ rt_write8:
     lda r_t4
     sep #$20
     sta f:z80_mailbox, x
+    lda #1                  ; (the sound host's idle driver runs again)
+    sta f:sound_poked
     rep #$20
     rtl
 
@@ -350,7 +356,48 @@ rt_write16:
     lda r_t4                ; word writes store the high byte
     xba
     jmp rt_write8
+:   cmp #$00A1
+    bne :+
+    lda CT0
+    cmp #$1200              ; the Z80's reset line: the sound driver
+    bne :+                  ; starts as it is released
+    lda r_t4
+    and #$0100
+    pha
+    jsl sound_reset_line
+    pla
 :   rtl
+
+; dsp_queue(uint16_t reg, uint16_t value) (snes/sound.c): a DSP write for
+; the S-CPU to pass to the sound program (DSP_RING; dropped when it is
+; full). (value at 4, s, reg at 6, s)
+dsp_queue:
+    php
+    sei
+    sep #$20
+    .a8
+    lda f:DSP_HEAD
+    inc
+    cmp f:DSP_TAIL
+    beq @full
+    dec
+    rep #$20
+    .a16
+    and #$00FF
+    asl
+    tax
+    lda 7, s                ; (past P)
+    sep #$20
+    .a8
+    sta f:DSP_RING, x
+    lda 5, s
+    sta f:DSP_RING + 1, x
+    lda f:DSP_HEAD
+    inc
+    sta f:DSP_HEAD
+@full:
+    plp
+    rtl
 
 ; Write 32 bits (A, CHI) at CT1:CT0.
 rt_write32:
@@ -489,6 +536,37 @@ rt_mul32:
 ; Signed 16-bit A * X -> A:CHI (32 bits), on the SA-1's multiplier. (Its
 ; users mask the VBlank interrupt, whose code multiplies too.)
 rt_muls16:
+    ldy z:SOFT_MATH         ; (the S-CPU: by shifts, on the magnitudes)
+    beq @hw
+    sta m_a
+    stx m_b
+    txa
+    eor m_a
+    pha                     ; (the sign of the product)
+    lda m_a
+    bpl :+
+    eor #$FFFF
+    inc
+    sta m_a
+:   lda m_b
+    bpl :+
+    eor #$FFFF
+    inc
+    sta m_b
+:   jsr mulu16_soft
+    ply
+    bpl :+
+    eor #$FFFF              ; negate CHI:A
+    clc
+    adc #1
+    pha
+    lda CHI
+    eor #$FFFF
+    adc #0
+    sta CHI
+    pla
+:   rtl
+@hw:
     php
     sei
     sta f:MA
@@ -519,7 +597,10 @@ rt_mulu16:
 mulu16:
     sta m_a
     stx m_b
-    php
+    ldx z:SOFT_MATH         ; (the S-CPU: by shifts)
+    beq :+
+    jmp mulu16_soft
+:   php
     sei
     sep #$20
     .a8
@@ -627,6 +708,13 @@ divu16:
     bne :+
     lda #0
     sta r_t1
+    rts
+:   cmp #$8000              ; below $8000: the divider
+    bcs :+
+    jsr hwdiv
+    lda r_t4
+    sta r_t1
+    lda r_t2
     rts
 :   sta r_t2                ; dividend, shifted into the remainder
     stz r_t1
@@ -762,7 +850,15 @@ divu32:
     rts
 :   stz r_t4
     stz r_t5
-    ldx #32
+    lda r_t3                ; both 16 bits, the dividend below $8000:
+    ora r_t1                ; the divider
+    bne :+
+    lda r_t2
+    bmi :+
+    jsr hwdiv
+    stz CHI
+    rts
+:   ldx #32
     lda r_t3                ; a 16-bit dividend: its first 16 steps only
     bne :+                  ; shift zeros through
     lda r_t2
@@ -1074,6 +1170,11 @@ f_divs:
 ; in r_t4. (16 steps of shift and subtract, unrolled.)
 div16:
     lda r_t3
+    bne :+
+    lda r_t2                ; a dividend below $8000: the divider
+    bmi :+
+    jmp hwdiv
+:   lda r_t3
 .repeat 16
     asl r_t2
     rol
@@ -1085,6 +1186,71 @@ div16:
 :
 .endrep
     sta r_t4
+    rts
+
+; A (below $8000) / r_t0 on the SA-1's divider (signed dividend, unsigned
+; divisor; the VBlank interrupt, which multiplies, masked): quotient in
+; r_t2, remainder in r_t4.
+hwdiv:
+    ldx z:SOFT_MATH         ; (the S-CPU: by shifts)
+    beq :+
+    jmp softdiv
+:   php
+    sei
+    sep #$20
+    .a8
+    pha
+    lda #1
+    sta f:MCNT
+    pla
+    rep #$20
+    .a16
+    sta f:MA
+    lda r_t0
+    sta f:MB                ; starts the division (5 cycles)
+    nop
+    nop
+    nop
+    lda f:MR
+    sta r_t2
+    lda f:MR + 2
+    sta r_t4
+    plp
+    rts
+
+; hwdiv's work without the divider: A (16 bits) / r_t0, quotient in r_t2,
+; remainder in r_t4.
+softdiv:
+    sta r_t2
+    stz r_t4
+    ldx #16
+:   asl r_t2
+    rol r_t4
+    lda r_t4
+    sec
+    sbc r_t0
+    bcc :+
+    sta r_t4
+    inc r_t2
+:   dex
+    bne :--
+    rts
+
+; Unsigned m_a * m_b -> A (low) : CHI (high), by shifts and adds.
+mulu16_soft:
+    stz CHI
+    lda #0
+    ldx #16
+:   asl
+    rol CHI
+    asl m_b
+    bcc :+
+    clc
+    adc m_a
+    bcc :+
+    inc CHI
+:   dex
+    bne :--
     rts
 
 ; s -> r_t0 (16 bits); d -> r_t3:r_t2, and a copy in m_b:m_a for the
@@ -1198,9 +1364,12 @@ sprite_object_c:
     rtl
 
 .segment "BWRAM"
+.ifdef TRACE
 trace_ring:     .res $400       ; (c816.py --trace) the last functions entered
 trace_pos:      .res 2
+.endif
 z80_mailbox:    .res $400       ; Z80 RAM $1C00-$1FFF: the sound driver's mailbox
+z80_ram = z80_mailbox - $1C00   ; (the driver's z80_ram[]: $1C00 on only)
 pad_th:         .res 1
 pad_frames:     .res 2          ; (PADTABLE) game frames so far,
 pad_last:       .res 2          ;  and $FFC726 when last read

@@ -4,7 +4,7 @@
  *
  * usage: snesrun CORE.so ROM FRAMES [-i SCRIPT] [-s FRAME]... [-o PREFIX]
  *                [-w WRAM.bin] [-b BWRAM.bin] [-v VRAM.bin] [-B FRAME]...
- *                [-P PADLOG] [-F] [-T TIMING]
+ *                [-P PADLOG] [-F] [-T TIMING] [-a AUDIO.wav]
  *
  * The script has the Genesis tools' format (tests/inputs/NAME.txt): lines of
  * "FIRST LAST BUTTONS" with buttons from UDLRABCS. The Genesis pad maps to
@@ -25,6 +25,7 @@
  * goes on).
  * -T writes a line per video frame to TIMING: the frame, the game's frame
  * count ($FFC726) and its game mode ($FFC704), from the BW-RAM's mirror.
+ * -a writes the sound (32 kHz stereo) to a WAV file.
  */
 #include <dlfcn.h>
 #include <stdarg.h>
@@ -197,8 +198,34 @@ static void video_refresh(const void *data, unsigned w, unsigned h, size_t pitch
     video_h = h;
 }
 
-static void audio_sample(int16_t l, int16_t r) { (void)l; (void)r; }
-static size_t audio_batch(const int16_t *d, size_t frames) { (void)d; return frames; }
+static FILE *audio;
+static long audio_frames;
+
+static void audio_sample(int16_t l, int16_t r)
+{
+    int16_t d[2] = { l, r };
+    if (audio)
+        audio_frames += (long)fwrite(d, 4, 1, audio);
+}
+
+static size_t audio_batch(const int16_t *d, size_t frames)
+{
+    if (audio)
+        audio_frames += (long)fwrite(d, 4, frames, audio);
+    return frames;
+}
+
+/* The WAV header, for audio_frames of 16-bit stereo at 32 kHz. */
+static void wav_header(FILE *f)
+{
+    uint32_t data = (uint32_t)audio_frames * 4, h[11];
+    h[0] = 0x46464952; h[1] = 36 + data; h[2] = 0x45564157;    /* RIFF, WAVE */
+    h[3] = 0x20746D66; h[4] = 16; h[5] = 1 | 2 << 16;          /* fmt: PCM, stereo */
+    h[6] = 32000; h[7] = 32000 * 4; h[8] = 4 | 16 << 16;
+    h[9] = 0x61746164; h[10] = data;                           /* data */
+    fseek(f, 0, SEEK_SET);
+    fwrite(h, 4, 11, f);
+}
 static void input_poll(void) {}
 
 static int16_t input_state(unsigned port, unsigned device, unsigned index, unsigned id)
@@ -285,6 +312,11 @@ int main(int argc, char **argv)
             timing = fopen(argv[k + 1], "w");
             if (!timing) { perror(argv[k + 1]); return 1; }
         }
+        else if (!strcmp(argv[k], "-a")) {
+            audio = fopen(argv[k + 1], "wb");
+            if (!audio) { perror(argv[k + 1]); return 1; }
+            wav_header(audio);
+        }
         else if (!strcmp(argv[k], "-w")) wram = argv[k + 1];
         else if (!strcmp(argv[k], "-b")) bwram = argv[k + 1];
         else if (!strcmp(argv[k], "-v")) vram = argv[k + 1];
@@ -369,5 +401,9 @@ int main(int argc, char **argv)
         dump(bwram, retro_get_memory_data(RETRO_MEMORY_SAVE_RAM), 0x40000);
     if (vram)
         dump(vram, retro_get_memory_data(RETRO_MEMORY_VIDEO_RAM), retro_get_memory_size(RETRO_MEMORY_VIDEO_RAM));
+    if (audio) {
+        wav_header(audio);
+        fclose(audio);
+    }
     return 0;
 }

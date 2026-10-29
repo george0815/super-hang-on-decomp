@@ -8,10 +8,12 @@
 .include "inc/hw.inc"
 .include "inc/mem.inc"
 
-.import sa1_reset, sa1_irq
+.import sa1_reset, sa1_irq, apu_upload, apu_pump, apu_driver
 
 .segment "ZEROPAGE"
 nmi_busy:   .res 1
+nmi_frames: .res 1         ; NMIs so far (the sound driver keeps up with them)
+snd_frames: .res 1         ; and the sound driver's VBlanks run
 
 .segment "CODE"
 
@@ -61,6 +63,8 @@ reset:
     lda #$FF
     sta SIWP
     stz UPLOAD_READY
+    stz DSP_HEAD
+    stz DSP_TAIL
     lda #$80
     sta SHOWN_INIDISP
     rep #$20
@@ -71,10 +75,20 @@ reset:
     sep #$20
     stz CCNT
 
+    jsr apu_upload          ; the sound program and samples
+
     lda #$81
     sta NMITIMEN            ; NMI and the automatic pad read
-:   wai
-    bra :-
+@idle:
+    wai
+@sound:                     ; the sound driver's VBlank (snes/sound.c) for
+    lda nmi_frames          ; each NMI, and its DSP writes
+    cmp snd_frames
+    beq @idle
+    inc snd_frames
+    jsr apu_driver
+    jsr apu_pump
+    bra @sound
 
 ; Zero the PPU registers that power up undefined.
 clear_ppu:
@@ -162,6 +176,7 @@ nmi:
     pha
     plb
     lda RDNMI
+    inc nmi_frames
     lda nmi_busy            ; a long upload ran into the next VBlank
     bne @return
     inc nmi_busy

@@ -111,6 +111,7 @@ ur_lo       = $8C       ; the row's changed columns
 ur_hi       = $8E
 ur_dst      = $90       ; the map's VRAM address
 ur_src      = $92       ; and its copy (bank of map_a)
+rl_n        = $94       ; race_offsets: lines left on this side of the edge
 
 .segment "CODE"
 .a16
@@ -555,7 +556,8 @@ dma_vram:
     ldx z:vdp_addr
     ldy #0
     stz z:dv_changed
-@word:
+    bra @word
+@one:                       ; a word at a time
     lda [dma_src], y
     cmp f:VRAM_MIRROR, x
     beq :+
@@ -566,14 +568,46 @@ dma_vram:
     inx
     inx
     dec z:dma_left
-    beq @last
-    txa
+    bne :+
+    jmp @last
+:   txa
     and #$001F
-    bne @word
+    bne @one
     jsr dv_tile             ; a tile done
-    bra @word
+@word:
+    txa                     ; at a tile's start with a tile to go: the
+    and #$001F              ; whole tile at once
+    bne @one
+    lda z:dma_left
+    cmp #16
+    bcc @one
+@tile:
+.repeat 16, i
+    lda [dma_src], y
+    cmp f:VRAM_MIRROR + 2 * i, x
+    beq :+
+    sta f:VRAM_MIRROR + 2 * i, x
+    inc z:dv_changed
+:   iny
+    iny
+.endrep
+    txa
+    clc
+    adc #32
+    tax
+    jsr dv_tile
+    lda z:dma_left
+    sec
+    sbc #16
+    sta z:dma_left
+    beq @end
+    cmp #16
+    bcs :+
+    jmp @one
+:   jmp @tile
 @last:
     jsr dv_tile
+@end:
     stx z:vdp_addr
     tya
     clc
@@ -1604,26 +1638,21 @@ race_lines:
 :   lda #((PLANE_A_MAP >> 10 << 2) | 3) | (((WINDOW_MAP >> 10 << 2) | 1) << 8)
 :   sta z:rl_sc
     ldx z:hsc
-    ldy #1                  ; the Genesis line
+    lda #1                  ; lines 1-110, the second header, 111-223
+    sta z:rl_gline
+    lda #110
+    sta z:rl_count
+    jsr sc_bytes
     sep #$20
     .a8
-@sc:
-    lda z:rl_sc
-    cpy z:win_end
-    bcc :+
-    lda z:rl_sc + 1
-:   sta f:hdma_bufs, x
-    inx
-    iny
-    cpy #111                ; after line 110 (the SNES's 111): the second header
-    bne :+
     lda #$80 | (HDMA_LINES - 112)
     sta f:hdma_bufs, x
-    inx
-:   cpy #224
-    bcc @sc
     rep #$20
     .a16
+    inx
+    lda #113
+    sta z:rl_count
+    jsr sc_bytes
     stx z:hsc
     ; the window's rows on screen
     lda z:win_end
@@ -1669,59 +1698,8 @@ race_lines:
     stx z:hofs
     jmp hdma_ends
 
-; rl_count lines' BG1 and BG2 scroll entries from X (rl_gline: the first
-; line's number, Y its offset in both scroll tables).
-race_offsets:
-@line:
-    lda z:rl_gline
-    cmp z:win_end
-    lda z:win_down
-    bne :+
-    bcc @window
-    bra @plane_a
-:   bcs @window
-@plane_a:
-    lda [hs_ptr], y
-    xba
-    eor #$FFFF
-    sec
-    adc #CROP
-    and #$03FF
-    sta f:hdma_bufs, x
-    lda (vs_table), y
-    xba
-    sta z:rl_v
-    dec
-    and #$03FF
-    sta f:hdma_bufs + 2, x
-    lda z:rl_v              ; the row on screen (once per row)
-    clc
-    adc z:rl_gline
-    and #$01F8
-    cmp z:rl_last_a
-    beq @plane_b
-    sta z:rl_last_a
-    phx
-    lsr
-    lsr
-    lsr
-    tax
-    sep #$20
-    .a8
-    lda #1
-    sta f:vis_a, x
-    rep #$20
-    .a16
-    plx
-    bra @plane_b
-@window:
-    lda #CROP
-    sta f:hdma_bufs, x
-    lda #$FFFF
-    sta f:hdma_bufs + 2, x
-@plane_b:
-    iny
-    iny
+.macro ro_plane_b         ; race_offsets: a line's BG2 entries, then the next
+                          ; line's
     lda [hs_ptr], y
     xba
     eor #$FFFF
@@ -1761,7 +1739,139 @@ race_offsets:
     inx
     inx
     inc z:rl_gline
-    dec z:rl_count
+.endmacro
+
+; rl_count lines' BG1SC bytes from X (rl_gline: the first line's
+; number): rl_sc below win_end, rl_sc + 1 from it on.
+sc_bytes:
+    lda z:win_end           ; lines before the edge: min(count, max(0,
+    sec                     ; win_end - gline))
+    sbc z:rl_gline
+    bcs :+
+    lda #0
+:   cmp z:rl_count
+    bcc :+
+    lda z:rl_count
+:   tay
+    eor #$FFFF
+    sec
+    adc z:rl_count
+    sta z:rl_n              ; the lines after it
+    clc
+    tya
+    adc z:rl_gline
+    adc z:rl_n
+    sta z:rl_gline
+    sep #$20
+    .a8
+    cpy #0
+    beq @after
+    lda z:rl_sc
+:   sta f:hdma_bufs, x
+    inx
+    dey
+    bne :-
+@after:
+    ldy z:rl_n
+    beq @done
+    lda z:rl_sc + 1
+:   sta f:hdma_bufs, x
+    inx
+    dey
+    bne :-
+@done:
+    rep #$20
+    .a16
+    rts
+
+; rl_count lines' BG1 and BG2 scroll entries from X (rl_gline: the first
+; line's number, Y its offset in both scroll tables). BG1 shows the window
+; on lines below win_end, or from it on if win_down: the lines on each
+; side of the edge go through a loop of their own.
+race_offsets:
+    lda z:win_end           ; lines before the edge: min(count, max(0,
+    sec                     ; win_end - gline))
+    sbc z:rl_gline
+    bcs :+
+    lda #0
+:   cmp z:rl_count
+    bcc :+
+    lda z:rl_count
+:   sta z:rl_n
+    eor #$FFFF              ; count -= them
+    sec
+    adc z:rl_count
+    sta z:rl_count
+    lda z:win_down
+    bne @below_window
+    jsr ro_window           ; the window, then plane A
+    lda z:rl_count
+    sta z:rl_n
+    jmp ro_plane
+@below_window:
+    jsr ro_plane            ; plane A, then the window
+    lda z:rl_count
+    sta z:rl_n
+
+; rl_n lines with the window on BG1.
+ro_window:
+    lda z:rl_n
+    beq @done
+@line:
+    lda #CROP
+    sta f:hdma_bufs, x
+    lda #$FFFF
+    sta f:hdma_bufs + 2, x
+    iny
+    iny
+    ro_plane_b
+    dec z:rl_n
+    bne @line
+@done:
+    rts
+
+; rl_n lines with plane A on BG1.
+ro_plane:
+    lda z:rl_n
+    bne @line
+    rts
+@line:
+    lda [hs_ptr], y
+    xba
+    eor #$FFFF
+    sec
+    adc #CROP
+    and #$03FF
+    sta f:hdma_bufs, x
+    lda (vs_table), y
+    xba
+    sta z:rl_v
+    dec
+    and #$03FF
+    sta f:hdma_bufs + 2, x
+    lda z:rl_v              ; the row on screen (once per row)
+    clc
+    adc z:rl_gline
+    and #$01F8
+    cmp z:rl_last_a
+    beq :+
+    sta z:rl_last_a
+    phx
+    lsr
+    lsr
+    lsr
+    tax
+    sep #$20
+    .a8
+    lda #1
+    sta f:vis_a, x
+    rep #$20
+    .a16
+    plx
+:   iny
+    iny
+    ro_plane_b
+    dec z:rl_n
     beq :+
     jmp @line
 :   rts
@@ -2142,43 +2252,38 @@ vscroll_b:
 cram_upload:
     lda z:cram_dirty
     beq @done
-    lda #128 + 128
+    lda #128 + 128 + UPLOAD_ITEM    ; (two entries)
     jsr upload_fits
     bcc @done
     stz z:cram_dirty
-    ldx #0
-@colour:
-    lda f:cram, x           ; ----BBB-GGG-RRR-
-    sta z:t0
-    and #$000E
-    jsr level
+    phb                     ; (the data bank: cram's)
+    sep #$20
+    .a8
+    lda #^cram
+    pha
+    plb
+    rep #$20
+    .a16
+    ldy #0
+@colour:                    ; ----BBB-GGG-RRR-: green and red by the low
+    lda a:cram, y           ; byte, blue by the high
+    and #$00FF
+    asl
+    tax
+    lda f:cram_gr, x
     sta z:t1
-    lda z:t0
-    lsr
-    lsr
-    lsr
-    lsr
-    and #$000E
-    jsr level
+    lda a:cram + 1, y
+    and #$000F
     asl
-    asl
-    asl
-    asl
-    asl
-    tsb z:t1
-    lda z:t0
-    xba
-    and #$000E
-    jsr level
-    xba
-    asl
-    asl
+    tax
+    lda f:cram_b, x
     ora z:t1
-    sta f:cgram_buffer, x
-    inx
-    inx
-    cpx #128
+    sta a:cgram_buffer, y
+    iny
+    iny
+    cpy #128
     bne @colour
+    plb
     lda z:VDP_REGS + 7
     and #$003F
     asl
@@ -2201,16 +2306,17 @@ cram_upload:
 @done:
     rts
 
-; A colour channel, 3 bits at bit 1 (A = 2v), as 5 bits: v << 2 | v >> 1.
-level:
-    sta z:count
-    asl
-    sta z:width
-    lda z:count
-    lsr
-    lsr
-    ora z:width
-    rts
+; A colour channel's 3 bits as 5: v << 2 | v >> 1. The Genesis colour's
+; low byte (GGG-RRR-) as SNES green and red, its high byte (----BBB-) as
+; blue.
+cram_gr:
+.repeat 256, I
+    .word ((I >> 1) & 7) << 2 | ((I >> 1) & 7) >> 1 | (((I >> 5) & 7) << 2 | ((I >> 5) & 7) >> 1) << 5
+.endrep
+cram_b:
+.repeat 16, I
+    .word (((I >> 1) & 7) << 2 | ((I >> 1) & 7) >> 1) << 10
+.endrep
 
 .segment "BWRAM"
 hdma_bufs:      .res 2 * HDMA_BUF

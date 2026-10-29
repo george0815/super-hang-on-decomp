@@ -6,7 +6,8 @@
  *
  * usage: spritecat ROM FRAMES INPUT.txt [FRAMES INPUT.txt]...
  * Prints one line per frame: map address, tile base, piece count, cells,
- * width x height, and a hash of the tiles' contents.
+ * width x height, a hash of the tiles' contents, the frames it was shown
+ * in, and the handler of the first object that showed it.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -74,6 +75,7 @@ typedef struct {
     uint64_t hash;
     int pieces, cells, w, h;
     long seen;
+    uint16_t handler;
 } Entry;
 
 static Entry *cat;
@@ -85,7 +87,7 @@ static uint64_t fnv(uint64_t h, const uint8_t *p, size_t n)
     return h;
 }
 
-static void note(uint32_t map, uint16_t base)
+static void note(uint32_t map, uint16_t base, uint16_t handler)
 {
     uint16_t pieces = rd16(map);
     uint64_t h = 0xCBF29CE484222325ull;
@@ -116,7 +118,7 @@ static void note(uint32_t map, uint16_t base)
         capcat = capcat ? 2 * capcat : 256;
         cat = realloc(cat, capcat * sizeof *cat);
     }
-    cat[ncat++] = (Entry){ map, base, h, pieces + 1, cells, x1 - x0, y1 - y0, 1 };
+    cat[ncat++] = (Entry){ map, base, h, pieces + 1, cells, x1 - x0, y1 - y0, 1, handler };
 }
 
 void host_frame(const uint8_t *pixels)
@@ -126,7 +128,7 @@ void host_frame(const uint8_t *pixels)
         uint32_t obj = OBJECTS + k * OBJ_SIZE;
         uint16_t map = rd16(obj + 0x24);
         if (rd16(obj) && map)
-            note(map & 0x8000 ? 0xFF0000u | map : map, rd16(obj + 2));
+            note(map & 0x8000 ? 0xFF0000u | map : map, rd16(obj + 2), rd16(obj));
     }
     if (++frame >= frames)
         longjmp(done, 1);
@@ -161,8 +163,9 @@ int main(int argc, char **argv)
             gen_run();
     }
     for (int i = 0; i < ncat; i++) {
-        printf("%06X %04X %2d %3d %3dx%-3d %016llX %ld\n", cat[i].map, cat[i].base, cat[i].pieces,
-               cat[i].cells, cat[i].w, cat[i].h, (unsigned long long)cat[i].hash, cat[i].seen);
+        printf("%06X %04X %2d %3d %3dx%-3d %016llX %ld %04X\n", cat[i].map, cat[i].base, cat[i].pieces,
+               cat[i].cells, cat[i].w, cat[i].h, (unsigned long long)cat[i].hash, cat[i].seen,
+               cat[i].handler);
         total_cells += cat[i].cells;
     }
     fprintf(stderr, "%d frames, %ld cells\n", ncat, total_cells);

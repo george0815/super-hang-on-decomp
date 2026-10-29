@@ -63,9 +63,16 @@ Hand-written 65816 covers:
 - the Genesis VDP layer: ports, DMA, maps, tile slots and HDMA scroll
   (`snes/vdp.s`);
 - the sprite renderer (`snes/sprites.s`);
-- the hot spots that the profiler shows: the road (`snes/road.s`),
-  `vdp_copy` (vdp.s) and `build_sprite_table` (sprites.s). These replace
-  compiled functions of the same name (`SNES_C_SKIP` in the Makefile).
+- the hot spots that the profiler shows: the road (`snes/road.s`, with
+  `isqrt_hex`), `vdp_copy` (vdp.s) and `build_sprite_table` (sprites.s).
+  These replace compiled functions of the same name (`SNES_C_SKIP` in the
+  Makefile).
+
+Divisions with a dividend below $8000 go to the SA-1's divider (rt.s
+`hwdiv`); the rest are shifts and subtractions. `isqrt_hex` is the
+original's hex digit square root, which is exactly the square root
+rounded down (checked against every edge case and a million random
+inputs), done a bit at a time.
 
 The HDMA tables are rebuilt only when their inputs change, unless the
 vertical scroll is per line (races): the scroll modes, the window, VSRAM
@@ -207,6 +214,39 @@ two maps are 224x192.
   at once, and a race frame lasts three VBlanks, each able to upload
   about 170 tiles, so streaming keeps up.
 
+How `snes/sprites.s` does it now:
+- A frame's pieces are split into groups by their place modulo 8, in the
+  order of each group's first piece. Most frames are one group; the race
+  start's gantry halves are seven, the starting lights two, the scaled
+  scenery two. Each group is on one grid: it fills a cell grid of up to
+  256x144 pixels, and each 2x2 group of cells becomes a 16x16 box per
+  palette and priority in it. Boxes of different groups may overlap;
+  earlier groups' are drawn on top.
+- A box with one quad used is an 8x8 OBJ, any more one 16x16 (its other
+  quads blank): that saves OBJs.
+- A box with the same cells (for its key) as an earlier box of its group
+  shares its block: the gantry's girders repeat, and its halves take 38
+  boxes each but far fewer blocks. Blocks count their users.
+- A frame's blocks are staged in BW-RAM and uploaded by the NMI. When the
+  frame's budget runs short, the build stops between 2x2 groups and goes
+  on in the next frame (`E_RESUME`), drawing what it has meanwhile. (Before,
+  a frame needing more than a frame's blocks was thrown away and built
+  again every frame, and never finished.)
+- The staging area is reused only once the uploads that read it have been
+  carried out.
+- 28 cached frames of up to 40 boxes; frames over 256x144 are not drawn.
+
+**Uploads per VBlank.** Each upload list entry costs the NMI a DMA setup
+from slow BW-RAM, about as much as 96 bytes of data (`UPLOAD_ITEM`), and
+the budget counts it. Counting bytes only, frames with many sprite blocks
+(two 64-byte entries each) overran the VBlank, and the VRAM writes past it
+were lost: blocks kept their previous tiles.
+
+**OAM.** The race start (the gantry, six bikes, the lights, the START sign)
+needs more than 128 OBJs, so the last objects drawn lose some. 32x32 OBJs
+for full 2x2 groups of boxes (OBSEL 16x16/32x32) would roughly halve the
+count.
+
 **Background tiles.** A screen shows at most about 200 distinct background
 tiles, but their Genesis tile numbers go up to 1790, and SNES BG tile
 numbers stop at 1023. Each mode will renumber them by 16-tile blocks.
@@ -253,13 +293,16 @@ approximated by samples and the DSP's ADSR.
    - Every recording matches the Genesis's RAM at the end of every game
      frame, apart from VBlank timing (`make snes-check`).
 4. Next:
-   - Race speed. Against the real Genesis (gpgx's recordings): logo,
-     title and menus run at about its speed, the demo race at about 90%
-     and races at about 83% (3.3 video frames a race frame, against 2.8).
-     The time is spread out: the road (race_build_road and its divisions,
-     scroll_tables, road_rows), the HDMA tables, the VDP layer's
-     conversions, and the compiled race logic.
-   - Sprite slices in busy race scenes.
+   - Races now match the real Genesis's speed on average (against gpgx's
+     recordings: the race recording 2.77 video frames a race frame on
+     both, the demo race 2.54 against 2.60). The SNES's frames vary more: some take 4 VBlanks and the
+     next 2, where the Genesis's take 3. The time left is spread out: the
+     road (race_build_road, scroll_tables, road_rows: about 20%), the
+     HDMA scroll entries (race_offsets, 8%), dma_vram (5%, mostly the
+     scroll and sprite tables), the sprite renderer (about 12%) and the
+     compiled C (20%).
+   - Sprite slices in busy race scenes, and the 128-OBJ limit at the race
+     start.
 5. Sound: an SPC700 driver.
 
 ## Open decisions

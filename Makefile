@@ -71,6 +71,9 @@ build/shangon: $(PORTSRC) src/port/options.h $(RUNTIME) $(RTHDRS) src/runtime/en
 
 port: build/shangon
 
+build/sndcat: tests/sndcat.c $(RUNTIME) $(RTHDRS) src/runtime/entry_native.c
+	$(CC) $(RCFLAGS) -o $@ tests/sndcat.c $(RUNTIME) src/runtime/entry_native.c -lm
+
 build/spritecat: tests/spritecat.c $(RUNTIME) $(RTHDRS) src/runtime/entry_native.c
 	$(CC) $(RCFLAGS) -o $@ tests/spritecat.c $(RUNTIME) src/runtime/entry_native.c -lm
 
@@ -105,16 +108,16 @@ tools/snes/snesrun: tools/snes/snesrun.c
 # holds the hand-written rest. CCODE1-4 are 64 KB code banks.
 SNES_C_BANK = race:CCODE1 objects:CCODE2 vblank:CCODE4
 # C functions the SNES does its own way (snes/rt.s)
-SNES_C_SKIP = vdp_copy,vdp_copy_rect,vdp_fill,write_words,hex_tiles,build_sprite_table,nemesis_to_vdp,nemesis_to_ram,scroll_tables,road_rows,race_build_road
+SNES_C_SKIP = vdp_copy,vdp_copy_rect,vdp_fill,write_words,hex_tiles,build_sprite_table,nemesis_to_vdp,nemesis_to_ram,scroll_tables,road_rows,race_build_road,isqrt_hex
 SNES_TRACE ?=           # 1: compiled functions note their entry (debugging)
 SNES_PROFILE ?=         # 1: the VBlank interrupt samples the SA-1's address
 SNES_PADLOG ?=          # a livetest SHO_PADLOG: the build plays that input
 SNES_DEBUG ?=           # 1: the VBlank copies I-RAM to BW-RAM (iram_copy)
-SNES_C_OBJS := $(patsubst src/game/%.c,build/snes/c/%.o,$(GAME))
+SNES_C_OBJS := $(patsubst src/game/%.c,build/snes/c/%.o,$(GAME)) build/snes/c/driver.o build/snes/c/sound.o
 SNES_OBJS := $(patsubst snes/%.s,build/snes/%.o,$(wildcard snes/*.s)) build/snes/assets.o \
              $(SNES_C_OBJS) build/snes/c/init.o $(if $(SNES_PADLOG),build/snes/padtable.o)
-SNES_INCS := $(wildcard snes/inc/*.inc) build/snes/gen/assets.inc build/snes/flags
-SNES_ASFLAGS := $(if $(SNES_PROFILE),-D PROFILE) $(if $(SNES_PADLOG),-D PADTABLE) $(if $(SNES_DEBUG),-D DEBUG)
+SNES_INCS := $(wildcard snes/inc/*.inc) build/snes/gen/assets.inc build/snes/gen/spc.inc build/snes/flags
+SNES_ASFLAGS := $(if $(SNES_SOUND_TEST),-D SOUND_TEST) $(if $(SNES_PROFILE),-D PROFILE) $(if $(SNES_PADLOG),-D PADTABLE) $(if $(SNES_DEBUG),-D DEBUG) $(if $(SNES_TRACE),-D TRACE)
 
 snes: build/snes/shangon.sfc
 
@@ -126,6 +129,23 @@ build/snes/flags: FORCE
 	@mkdir -p build/snes
 	@echo '$(SNES_ASFLAGS) $(SNES_C_SKIP)' | cmp -s - $@ || echo '$(SNES_ASFLAGS) $(SNES_C_SKIP)' > $@
 
+# The sound: the SPC700 program (snes/spc) with the samples: the FM voices
+# the songs use, rendered (tools/snes/voices.c) and packed with their
+# table for snes/sound.c (tools/snes/sound.py)
+build/snes/voices: tools/snes/voices.c $(RUNTIME) $(RTHDRS) src/runtime/entry_native.c
+	@mkdir -p build/snes
+	$(CC) $(RCFLAGS) -o $@ tools/snes/voices.c $(RUNTIME) src/runtime/entry_native.c -lm
+
+build/snes/gen/voices.txt: build/snes/voices | check
+	@mkdir -p build/snes/gen
+	build/snes/voices $(ROM) $@
+
+build/snes/gen/samples.bin build/snes/gen/samples_dir.bin build/snes/gen/voices.h &: tools/snes/sound.py build/snes/gen/voices.txt
+	$(PYTHON) tools/snes/sound.py build/snes/gen
+
+build/snes/gen/spc.bin build/snes/gen/spc.inc &: snes/spc/driver.spc tools/snes/spc700.py build/snes/gen/samples.bin build/snes/gen/samples_dir.bin
+	$(PYTHON) tools/snes/spc700.py snes/spc/driver.spc build/snes/gen/spc.bin -l build/snes/gen/spc.inc
+
 build/snes/padtable.o: $(SNES_PADLOG) tools/snes/padtable.py
 	$(PYTHON) tools/snes/padtable.py $(SNES_PADLOG) build/snes/gen/padtable.s
 	$(CA65) --cpu 65816 -o $@ build/snes/gen/padtable.s
@@ -134,17 +154,26 @@ build/snes/assets.o: build/snes/gen/assets.s
 	$(CA65) --cpu 65816 -I build/snes/gen --bin-include-dir build/snes/gen -o $@ $<
 
 build/snes/%.o: snes/%.s $(SNES_INCS)
-	$(CA65) --cpu 65816 -g -I snes -I build/snes $(SNES_ASFLAGS) -o $@ $<
+	$(CA65) --cpu 65816 -g -I snes -I build/snes --bin-include-dir build/snes $(SNES_ASFLAGS) -o $@ $<
 
 build/snes/c/%.s: src/game/%.c src/game/game.h tools/snes/c816.py $(wildcard tools/snes/include/*.h) build/snes/flags
 	@mkdir -p build/snes/c
 	$(PYTHON) tools/snes/c816.py $@ $(or $(patsubst $*:%,%,$(filter $*:%,$(SNES_C_BANK))),CCODE3) $< --skip $(SNES_C_SKIP) $(if $(SNES_TRACE),--trace) $(if $(SNES_PADLOG),--cpp-arg -DPADTABLE)
 
+# the sound driver and its host (snes/sound.c), with the game's C
+build/snes/c/driver.s: src/sound/driver.c src/sound/driver.h tools/snes/c816.py $(wildcard tools/snes/include/*.h) build/snes/flags
+	@mkdir -p build/snes/c
+	$(PYTHON) tools/snes/c816.py $@ CCODE4 $< --cpp-arg -Isrc/sound $(if $(SNES_TRACE),--trace)
+
+build/snes/c/sound.s: snes/sound.c src/sound/driver.h build/snes/gen/voices.h tools/snes/c816.py $(wildcard tools/snes/include/*.h) build/snes/flags
+	@mkdir -p build/snes/c
+	$(PYTHON) tools/snes/c816.py $@ CCODE4 $< --cpp-arg -Isrc/sound --cpp-arg -Ibuild/snes/gen $(if $(SNES_TRACE),--trace)
+
 build/snes/c/%.o: build/snes/c/%.s $(SNES_INCS)
 	$(CA65) --cpu 65816 -g -I snes -I build/snes -o $@ $<
 
 # Calls every compiled file's initialiser of statics
-build/snes/c/init.s: $(patsubst src/game/%.c,build/snes/c/%.s,$(GAME))
+build/snes/c/init.s: $(patsubst src/game/%.c,build/snes/c/%.s,$(GAME)) build/snes/c/driver.s build/snes/c/sound.s
 	@( echo '.p816'; echo '.export c_init'; \
 	   for f in $$(grep -h '^.export [a-z_]*__init$$' $^ | cut -d' ' -f2); do echo ".import $$f"; done; \
 	   echo '.segment "CODE2"'; echo 'c_init:'; \
@@ -163,9 +192,10 @@ BWSHOTS ?=
 PADLOG ?=               # drive the pad by the game's reads (livetest SHO_PADLOG)
 FRAMEDUMP ?=            # 1 (with SNES_PADLOG builds): build/snes/shot_fN.ram as game frame N ends
 TIMING ?=               # file: per video frame, the game frame count and mode
+AUDIO ?=                # file: the sound, as WAV
 INPUT  ?= tests/inputs/attract.txt
 snes-shots: build/snes/shangon.sfc tools/snes/snesrun
-	tools/snes/snesrun $(SNESCORE) $< $(FRAMES) -i $(INPUT) $(foreach f,$(SHOTS),-s $(f)) $(foreach f,$(BWSHOTS),-B $(f)) $(if $(PADLOG),-P $(PADLOG)) $(if $(FRAMEDUMP),-F) $(if $(TIMING),-T $(TIMING)) -o build/snes/shot -w build/snes/wram.bin -b build/snes/bwram.bin -v build/snes/vram.bin
+	tools/snes/snesrun $(SNESCORE) $< $(FRAMES) -i $(INPUT) $(foreach f,$(SHOTS),-s $(f)) $(foreach f,$(BWSHOTS),-B $(f)) $(if $(PADLOG),-P $(PADLOG)) $(if $(FRAMEDUMP),-F) $(if $(TIMING),-T $(TIMING)) $(if $(AUDIO),-a $(AUDIO)) -o build/snes/shot -w build/snes/wram.bin -b build/snes/bwram.bin -v build/snes/vram.bin
 
 # Each recording (CHECK=names, default all) on the SNES against the native
 # port, the RAM as each game frame ends (tools/snes/framecheck.sh; KEEP=1

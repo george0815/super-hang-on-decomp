@@ -26,17 +26,16 @@ SCROLL_BUFFER_SEL = $0580
 SCROLL_FLIP       = $06C4
 VSCROLL_LINES     = $1500
 HSCROLL_LINES     = $1880
+HS_VS             = HSCROLL_LINES - VSCROLL_LINES
 ROM_STRIPES       = $00FE6E ; 32 patterns of 96 bytes
 
 ; direct page: $20-$3F
 delta       = $20       ; 32 bits
 bg          = $24
 d4          = $26
-d5          = $28
 blank_rows  = $2A
 stripes     = $2C       ; 24 bits
 half        = $30
-hs          = $32
 vs          = $34
 row         = $36
 top         = $38
@@ -47,6 +46,17 @@ count       = $3E
 .segment "CODE2"
 .a16
 .i16
+
+; A >> 4, signed.
+.macro asr4
+    eor #$8000              ; (biased by $8000 >> 4)
+    lsr
+    lsr
+    lsr
+    lsr
+    sec
+    sbc #$0800
+.endmacro
 
 ; ---------------------------------------------------------- scroll tables
 
@@ -136,36 +146,31 @@ race__scroll_tables:
     eor #$0700
     sta half
     clc
-    adc #HSCROLL_LINES
-    sta hs
-    lda half
-    clc
     adc #VSCROLL_LINES
     sta vs
     stz d4
-    stz d5
     stz row
-@row:
+    ldx vs                  ; (the row's entries: vertical at X, horizontal
+@row:                       ; HS_VS past it)
     lda row
     asl
-    tax
-    ldw ROAD_ROW_LINES, x
     tay
+    lda a:ROAD_ROW_LINES, y ; (big-endian: zero either way)
     bne @road
     inc d4                  ; above the road
     bra @next
 @road:
+    xba
     lsr
     sta line
-    lda #$0140              ; v = $140 - d5 + line, $C0 less on stripes
+    lsr
+    tay
+    lda #$0140              ; v = $140 - row + line, $C0 less on stripes
     sec
-    sbc d5
+    sbc row
     clc
     adc line
     sta v
-    lda line
-    lsr
-    tay
     sep #$20
     .a8
     lda [stripes], y
@@ -176,45 +181,37 @@ race__scroll_tables:
     sec
     sbc #$00C0
     sta v
-:   ldx vs                  ; (-row, v)
-    lda row
+:   lda row                 ; (-row, v)
     eor #$FFFF
     inc
-    stw 0, x
+    xba
+    sta a:0, x
     lda v
-    stw 2, x
+    xba
+    sta a:2, x
     lda line                ; (delta's high word, centre >> 6 - 100)
     asl
     tay
     ldw ROAD_CENTRE_LINES, y
-    cmp #$8000
-    ror
-    cmp #$8000
-    ror
-    cmp #$8000
-    ror
-    cmp #$8000
-    ror
-    cmp #$8000
-    ror
-    cmp #$8000
-    ror
+    eor #$8000              ; (signed: biased by $8000 >> 6)
+    lsr
+    lsr
+    lsr
+    lsr
+    lsr
+    lsr
     sec
-    sbc #100
-    ldx hs
-    stw 2, x
+    sbc #100 + $0200
+    xba
+    sta a:HS_VS + 2, x
     lda delta + 2
-    stw 0, x
+    xba
+    sta a:HS_VS, x
 @next:
-    inc d5
-    lda hs
-    clc
-    adc #4
-    sta hs
-    lda vs
-    clc
-    adc #4
-    sta vs
+    inx
+    inx
+    inx
+    inx
     inc row
     lda row
     cmp #$00E0
@@ -275,8 +272,6 @@ race__scroll_tables:
     dec count
     bne :-
     stx vs
-    lda #$FFFF
-    sta d5
     lda d4
     bmi @tops_done
     inc
@@ -341,16 +336,21 @@ race__scroll_tables:
 
 ; count entries from vs on: (BG_SCROLL, top - 1).
 hold_rows:
-    ldx vs
-:   ldw BG_SCROLL
-    stw 0, x
-    lda top
+    lda top                 ; (both as stored)
     dec
-    stw 2, x
-    txa
-    clc
-    adc #4
-    tax
+    xba
+    sta CT1
+    lda a:BG_SCROLL
+    sta CT0
+    ldx vs
+:   lda CT0
+    sta a:0, x
+    lda CT1
+    sta a:2, x
+    inx
+    inx
+    inx
+    inx
     dec count
     bne :-
     rts
@@ -386,24 +386,29 @@ count_down:
 race__road_rows:
     ldx #$127E              ; $FF127E - 2k,
     ldy #$107E              ; $FF107E - 2k,
-    stz CT1                 ; 8k
+    lda #$F800
+    sta CT1                 ; 8k (less asr4's bias)
 :   lda a:0, x
     xba
-    jsr asr4
+    eor #$8000              ; (>> 4, signed, biased)
+    lsr
+    lsr
+    lsr
+    lsr
     clc
     adc CT1
     xba
     sta a:0, y
     dex
     dex
-    dey
-    dey
     lda CT1
     clc
     adc #8
     sta CT1
-    cmp #$C0 * 8
-    bcc :-
+    dey
+    dey
+    cpy #$107E - $C0 * 2
+    bne :-
     ; rows not reached: none
     ldw ROAD_ROWS_BLANK
     eor #$FFFF
@@ -419,7 +424,7 @@ race__road_rows:
     lda #1
     stw ROAD_HIDDEN_FROM
     ldw ROAD_Y_LINES
-    jsr asr4
+    asr4
     sta top                 ; (prev)
     bmi @done
     lda #$00DF
@@ -430,54 +435,50 @@ race__road_rows:
     clc
     adc #ROAD_ROW_LINES
     tax                     ; row
-    stz row                 ; k
+    ldy #0                  ; 2k
 @line:
-    lda row
-    asl
-    inc
-    sta line                ; 2k + 1
-    lda row
-    asl
-    tay
     lda ROAD_Y_LINES + 2, y
     xba
-    jsr asr4
+    asr4
     sta v                   ; h
+    tya
+    inc
+    xba
+    sta line                ; 2k + 1, as stored
     lda top
     sec
     sbc v
     beq @same
     bmi @back
     sta count               ; down: d rows
+    lda line
 :   inx
     inx
-    lda line
-    stw 0, x
+    sta a:0, x
     dec count
     bne :-
     bra @next_line
 @same:
     lda line
-    stw 0, x
+    sta a:0, x
     bra @next_line
 @back:
     sta count               ; back up over a hill: -d rows
+    lda line
 :   dex
     dex
-    lda line
-    stw 0, x
+    sta a:0, x
     inc count
     bne :-
-    lda line
-    stw ROAD_HIDDEN_FROM
+    sta a:ROAD_HIDDEN_FROM
     txa
     stw ROAD_HIDDEN_FROM + 2
 @next_line:
     lda v
     sta top
-    inc row
-    lda row
-    cmp #$00BF
+    iny
+    iny
+    cpy #$00BF * 2
     bcc @line
 @done:
     ldw ROAD_HIDDEN_FROM
@@ -490,22 +491,11 @@ race__road_rows:
     stw ROAD_HIDDEN_FROM + 2
     rtl
 
-; A >> 4, signed.
-asr4:
-    cmp #$8000
-    ror
-    cmp #$8000
-    ror
-    cmp #$8000
-    ror
-    cmp #$8000
-    ror
-    rts
 
 ; ------------------------------------------------------------ road builder
 
-.export race_build_road
-.import race__isqrt_hex, race__track_heading, f_divs
+.export race_build_road, race__isqrt_hex
+.import race__track_heading, f_divs
 
 ROAD_SCRATCH      = $0730
 ROAD_BEND_LINES   = $0B00
@@ -741,14 +731,16 @@ race_build_road:
     lda CHI
     adc rb_t0 + 2
     sta rb_t0 + 2           ; x * dirx + y * diry
-    ldx #14                 ; >> 7 >> 7 (signed), low word only
-:   lda rb_t0 + 2
-    cmp #$8000
-    ror rb_t0 + 2
-    ror rb_t0
-    dex
-    bne :-
-    lda rb_t0
+    lda rb_t0               ; >> 7 >> 7 (signed), low word only: bits
+    asl                     ; 14-29, the low word's top two bits under
+    rol                     ; the high word's shifted up two
+    rol
+    and #$0003
+    sta rb_t0
+    lda rb_t0 + 2
+    asl
+    asl
+    ora rb_t0
     clc
     adc #$0410
     sta rb_t1               ; the divisor
@@ -929,6 +921,57 @@ race_build_road:
     bcc @centre
     rtl
 
+; isqrt_hex(uint32_t n) (race.c): the square root, rounded down, which is
+; what the original's hex digit method gives; here a bit at a time. (n at
+; 4, s; scroll_tables's direct page, not in use.)
+sq_n        = $20       ; 32 bits: n, shifted out two bits a step
+sq_r        = $24       ; 32 bits: the remainder
+sq_t        = $28       ; 32 bits: 4 root + 1
+sq_q        = $2C       ; the root
+race__isqrt_hex:
+    lda 4, s
+    sta sq_n
+    lda 6, s
+    sta sq_n + 2
+    stz sq_r
+    stz sq_r + 2
+    stz sq_q
+    ldy #16
+@bit:
+    asl sq_n                ; r = r << 2 | n's top two bits
+    rol sq_n + 2
+    rol sq_r
+    rol sq_r + 2
+    asl sq_n
+    rol sq_n + 2
+    rol sq_r
+    rol sq_r + 2
+    stz sq_t + 2            ; r >= 4 q + 1: subtract it, q = 2 q + 1
+    lda sq_q
+    asl
+    rol sq_t + 2
+    asl
+    rol sq_t + 2
+    ora #1
+    sta sq_t
+    lda sq_r
+    sec
+    sbc sq_t
+    tax
+    lda sq_r + 2
+    sbc sq_t + 2
+    bcc :+
+    sta sq_r + 2
+    stx sq_r
+    sec
+    rol sq_q
+    bra :++
+:   asl sq_q
+:   dey
+    bne @bit
+    lda sq_q
+    rtl
+
 ; A (signed 16 bits) << 14 -> A (low word), X (high word).
 shl14:
     cmp #$8000
@@ -990,14 +1033,17 @@ sum16:
 
 ; (A low, X high) >> 5, signed: the low word.
 asr5:
+    lsr                     ; the low word's bits 5-15 under the high
+    lsr                     ; word's 0-4
+    lsr
+    lsr
+    lsr
     sta CT0
-    stx CT1
-    ldx #5
-:   lda CT1
-    cmp #$8000
-    ror CT1
-    ror CT0
-    dex
-    bne :-
-    lda CT0
+    txa
+    asl
+    asl
+    asl
+    xba
+    and #$F800
+    ora CT0
     rts

@@ -29,6 +29,9 @@ SA1_IRQ_DP   = $3300    ; the SA-1 VBlank interrupt's own direct page
 PAD_HELD_MD  = $003018  ; byte: the pad as the Genesis's S A C B R L D U
 UPLOAD_LIST  = $00301A  ; word: the ready upload list (bank $41)
 HDMA_TABLES  = $00301C  ; word: the HDMA tables to show (vdp.s, bank $41)
+DSP_HEAD     = $003020  ; byte: the next free pair in DSP_RING (the SA-1's)
+DSP_TAIL     = $003021  ; byte: the next pair to send (the S-CPU's, apu.s)
+DSP_RING     = $003400  ; 256 DSP writes: register, value
 
 ; Test builds (PADTABLE): set as a game frame ends; snesrun -F dumps the
 ; Genesis RAM and clears it (shangon.cfg keeps the BWRAM segment below).
@@ -48,6 +51,9 @@ UP_END       = 0
 UP_VRAM      = 1
 UP_CGRAM     = 2
 UP_OAM       = 3
+; What an entry costs the NMI besides its bytes (setting up its DMA, with
+; the list in slow BW-RAM), counted against the VBlank's budget in bytes
+UPLOAD_ITEM  = 96
 
 ; Genesis RAM the frame loop and VBlank use (offsets in the mirror)
 VBLANK_COUNT = $0500    ; word, counted by every VBlank

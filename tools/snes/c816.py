@@ -246,6 +246,8 @@ class Compiler:
 
     def const_eval(self, e):
         """The value of a constant expression, or None."""
+        if type(e).__name__ == 'ArrayDesignator':     # [e] = (pycparser 3)
+            e = e.expr
         if isinstance(e, c_ast.Constant):
             if e.type in ('int', 'unsigned int', 'long int', 'unsigned long int', 'long long int'):
                 s = e.value.rstrip('uUlL')
@@ -1578,6 +1580,29 @@ class Compiler:
             self.gen(rhs, width)
             self.store_var(var, width)
             return width
+        # an element of a static array of bytes or words: long indexed
+        if isinstance(lv, c_ast.ArrayRef) and isinstance(lv.name, c_ast.ID) \
+                and lt.is_int and lt.size in (1, 2):
+            var = self.lookup(lv.name.name)
+            if var is not None and var.where == 'static' and var.type.kind == 'array':
+                self.gen(rhs, 16)
+                self.push16()
+                self.gen(lv.subscript, 16)
+                self.scale(lt.size)
+                self.emit('tax')
+                self.emit('pla')
+                self.depth -= 2
+                if lt.size == 1:
+                    self.emit('sep #$20')
+                    self.emit('sta f:%s, x' % var.symbol)
+                    self.emit('rep #$20')
+                    if lt.signed:
+                        self.sign8()
+                    else:
+                        self.emit('and #$00FF')
+                else:
+                    self.emit('sta f:%s, x' % var.symbol)
+                return 16
         # through memory: the address first
         self.address_of(lv)
         self.push32()
@@ -1992,11 +2017,9 @@ class Compiler:
     def s_Switch(self, s):
         cls = self.vclass(s.cond)
         width = 16 if cls.narrow() else 32
-        if width == 32:
-            raise CompileError('switch on a 32-bit value')
-        self.gen(s.cond, 16)
-        tmp = self.alloc_local('@switch', INT if False else T('int', 2, False))
-        self.store_var(tmp, 16)
+        self.gen(s.cond, width)
+        tmp = self.alloc_local('@switch', T('int', width // 8, False))
+        self.store_var(tmp, width)
         end = self.new_label()
         cases = []
         default = None
@@ -2011,6 +2034,10 @@ class Compiler:
             self.emit('lda %s' % self.sref(tmp))
             self.emit('cmp #$%04X' % (val & 0xFFFF))
             self.emit('bne %s' % nxt)
+            if width == 32:             # (and the high word)
+                self.emit('lda %s' % self.sref(tmp, 2))
+                self.emit('cmp #$%04X' % (val >> 16 & 0xFFFF))
+                self.emit('bne %s' % nxt)
             self.emit('jmp %s' % lab)
             self.label(nxt)
         self.emit('jmp %s' % (default[0] if default else end))
@@ -2308,6 +2335,7 @@ class Compiler:
         cpp += self.cpp_args + [self.path]
         text = subprocess.run(cpp, check=True, capture_output=True, text=True).stdout
         ast = c_parser.CParser().parse(text, self.path)
+        self.fold_enums(ast)
         fdefs = []
         for ext in ast.ext:
             if isinstance(ext, c_ast.Typedef):
@@ -2369,6 +2397,42 @@ class Compiler:
                 self.function(fd)
             except CompileError as err:
                 raise CompileError('%s: %s' % (name, err))
+
+    def fold_enums(self, ast):
+        """Enumerators become integer constants wherever they are used."""
+        values = {}
+
+        def collect(node):
+            if isinstance(node, c_ast.Enum) and node.values is not None:
+                k = 0
+                for e in node.values.enumerators:
+                    if e.value is not None:
+                        replace(e.value)
+                        k = self.const_eval(e.value)
+                        if k is None:
+                            raise CompileError('enumerator %s' % e.name)
+                    values[e.name] = k
+                    k += 1
+            for _, child in node.children():
+                collect(child)
+
+        def replace(node):
+            for name in node.__slots__:
+                child = getattr(node, name, None)
+                if isinstance(child, c_ast.ID) and child.name in values:
+                    setattr(node, name, c_ast.Constant('int', str(values[child.name])))
+                elif isinstance(child, c_ast.Node):
+                    replace(child)
+                elif isinstance(child, list):
+                    for i, item in enumerate(child):
+                        if isinstance(item, c_ast.ID) and item.name in values:
+                            child[i] = c_ast.Constant('int', str(values[item.name]))
+                        elif isinstance(item, c_ast.Node):
+                            replace(item)
+
+        collect(ast)
+        if values:
+            replace(ast)
 
     def calls(self, node):
         found = []

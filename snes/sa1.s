@@ -15,7 +15,8 @@
 
 .export sa1_reset, sa1_irq, upload, upload_vram, upload_fits, upload_handover
 .import vdp_reset, sprites_reset, c_init, pad_frames, pad_last
-.import reset, vblank_menu, vblank_race
+.import reset, vblank_menu, vblank_race, z80_mailbox
+.import __CBSS_RUN__, __CBSS_SIZE__
 
 UPLOAD_A = $E000        ; the two upload lists (bank $41)
 
@@ -59,6 +60,8 @@ sa1_reset:
     rep #$20
     .a16
     stz up_pos
+    stz up_count
+    stz z:SOFT_MATH         ; (the SA-1's arithmetic is there)
     lda #UPLOAD_A
     sta z:up_list
     lda #UPLOAD_BUDGET
@@ -71,6 +74,19 @@ sa1_reset:
 .endif
     jsr vdp_reset
     jsr sprites_reset
+    ldx #0                  ; the C's statics zero (as C's are), and the
+    lda #0                  ; Z80 RAM the sound driver keeps
+:   sta f:__CBSS_RUN__, x
+    inx
+    inx
+    cpx #__CBSS_SIZE__ + 1
+    bcc :-
+    ldx #0
+:   sta f:z80_mailbox, x
+    inx
+    inx
+    cpx #$400
+    bcc :-
     jsl c_init              ; the C's initialised statics
     jml reset               ; the game (interrupts masked, as on a reset)
 
@@ -226,9 +242,11 @@ pad_map:
 ; about 5.5 KB a frame. OAM always goes; the rest checks.
 UPLOAD_BUDGET = 5400 - 544
 
-; Is there room for A more bytes this frame? Carry set if so (always while
-; the display is off before or after this VBlank).
+; Is there room for A more bytes (and an entry) this frame? Carry set if
+; so (always while the display is off before or after this VBlank).
 upload_fits:
+    clc
+    adc #UPLOAD_ITEM
     pha
     sep #$20
     .a8
@@ -260,11 +278,13 @@ upload:
     php
     sei
     pha
-    lda z:up_budget
+    lda z:up_budget         ; (its bytes and the entry)
     sec
     sbc up_len
-    bcs :+
-    lda #0
+    bcc :+
+    sbc #UPLOAD_ITEM
+    bcs :++
+:   lda #0
 :   sta z:up_budget
     lda z:up_list
     clc
@@ -307,6 +327,7 @@ upload_handover:
     eor #UPLOAD_A ^ UPLOAD_B
     sta z:up_list
     stz up_pos
+    inc z:up_count
     lda #UPLOAD_BUDGET
     sta z:up_budget
     sep #$20

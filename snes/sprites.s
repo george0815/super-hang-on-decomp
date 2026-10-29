@@ -13,8 +13,8 @@
 ; each tile's changes, vdp.s). Tiles are converted to SNES form once per
 ; change, into a cache in BW-RAM bank $43.
 ;
-; Maps that are not on one grid, and frames over 128 pixels, are not
-; drawn yet.
+; Maps that are not on one grid, and frames over 256 pixels across or
+; 144 down, are not drawn yet.
 
 .p816
 .smart
@@ -32,10 +32,16 @@ VRAM_MIRROR = $420000
 PLANAR      = $430000   ; the SNES form of each Genesis tile, 32 bytes
 OBJ_TILES   = $6000     ; OBJ VRAM (word address), 512 tiles
 BLOCKS      = 128       ; 16x16 blocks of it
-ENTRIES     = 32        ; cached frames
-MAX_BOXES   = 32
-ENTRY_SIZE  = 10 + MAX_BOXES * 8
-GRID        = 16        ; cells a side (128 pixels)
+.ifdef TRACE
+ENTRIES     = 24        ; cached frames (trace builds: room for the ring)
+.else
+ENTRIES     = 27        ; cached frames
+.endif
+MAX_BOXES   = 40
+MAX_PHASES  = 32        ; groups of a frame's pieces
+ENTRY_SIZE  = 14 + MAX_BOXES * 8
+GRID        = 32        ; cells across (256 pixels): a row of the grid
+GRID_H      = 18        ; cells down (144 pixels)
 BLOCK_BUDGET = 24       ; new blocks per frame
 CROP        = 32
 
@@ -45,7 +51,9 @@ E_TILE0     = 2
 E_SUM       = 4         ; tile_gen sum of its tiles when built
 E_USED      = 6         ; the frame it was last drawn in
 E_BOXES     = 8
-E_BOX       = 10        ; boxes: block, attributes, dx (word), dy (word),
+E_RESUME    = 10        ; unfinished: the group + 1, row and column to go on
+                        ;  from (bytes; 0: finished)
+E_BOX       = 14        ; boxes: block, attributes, dx (word), dy (word),
                         ; then the quads drawn as 8x8 OBJs (0: one 16x16)
 
 OBJ_TILE_BASE   = $02
@@ -66,8 +74,8 @@ sum         = $10
 entry       = $12       ; its offset in entries
 pieces      = $14
 nbox        = $16
-first_x     = $18
-first_y     = $1A
+sby         = $18       ; build_from: the group's first row of boxes,
+sbx         = $1A       ;  and that row's first column
 min_x       = $1C
 min_y       = $1E
 max_x       = $20
@@ -105,6 +113,18 @@ quads       = $6A       ; draw_entry: quads left to draw as 8x8
 usrc        = $5E       ; 24 bits: an upload's source,
 udst        = $62       ; VRAM word address,
 ulen        = $64       ; length
+sptr        = $6C       ; 24 bits: stage_tile's destination
+vptr        = $70       ; 24 bits: planar's source, in the VRAM copy
+bnext       = $74       ; new_block: where the search for a free one starts
+phase       = $76       ; build_entry: the group's (x & 7) | (y & 7) << 3,
+nphase      = $78       ;  the groups,
+iphase      = $7A       ;  and the one being built
+gfresh      = $7C       ; cut_boxes: nothing drawn yet from this 2x2 group
+stage_list  = $7E       ; up_count when blocks were last staged
+tw_attr     = oam_x     ; find_twin's (the drawing's, idle while building):
+tw_bx       = oam_y     ;  the attributes, the group of cells,
+tw_by       = col
+tw_box      = row       ;  the box being compared
 
 .segment "CODE"
 .a16
@@ -133,6 +153,10 @@ sprites_reset:
     inx
     cpx #BLOCKS
     bcc :-
+    stz z:bnext
+    stz z:stage_pos
+    lda f:SA1_DP + up_count
+    sta z:stage_list
     ldx #0
 :   lda #0
     sta f:entries + E_MAP, x
@@ -152,8 +176,22 @@ sprites_begin:
     enter
     inc z:frame
     stz z:oam_n
+    ; the staged blocks' uploads: until the list they are in has been
+    ; handed over and carried out, new blocks go after them
+    lda f:SA1_DP + up_count
+    cmp z:stage_list
+    beq :+
+    lda f:UPLOAD_READY
+    and #$00FF
+    bne :+
     stz z:stage_pos
-    lda #BLOCK_BUDGET
+:   lda z:stage_pos         ; budget = the staging blocks left
+    asl
+    xba
+    and #$00FF              ; (/ 128)
+    eor #$FFFF
+    sec
+    adc #BLOCK_BUDGET
     sta z:budget
     ldx #0
     lda #0
@@ -396,11 +434,18 @@ sprite_object:
     sta z:y0
     jsr frame_sum
     jsr find_entry
-    bcc @draw
+    bcc @found
     lda z:entry
     cmp #$FFFF
     beq @done               ; no entry to spare
     jsr build_entry
+    bra @draw
+@found:
+    ldx z:entry             ; unfinished: go on with it
+    lda f:entries + E_RESUME, x
+    and #$00FF
+    beq @draw
+    jsr resume_entry
 @draw:
     jsr draw_entry
 @done:
@@ -532,12 +577,13 @@ free_entry_blocks:
     tax
 @box:
     phx
-    lda f:entries, x        ; the block
+    lda f:entries, x        ; the block: one user less
     and #$00FF
     tax
     sep #$20
     .a8
-    lda #0
+    lda f:block_owner, x
+    dec
     sta f:block_owner, x
     rep #$20
     .a16
@@ -731,48 +777,129 @@ high_bits:
 
 ; ------------------------------------------------------------- building
 
-; Build the frame into entry: the cell grid, then its boxes.
+; Build the frame into entry. Its pieces are split into groups by their
+; place modulo 8 (most frames are one group), in the order of each group's
+; first piece; each group fills the cell grid, and its 2x2 groups of
+; cells become boxes. Earlier groups' boxes are drawn on top. When this
+; frame's blocks or uploads run short, the build stops between 2x2
+; groups and goes on in the next frame (E_RESUME); the boxes built so far
+; are drawn meanwhile.
 build_entry:
     ldx z:entry
     lda z:sum
     sta f:entries + E_SUM, x
     lda #0
     sta f:entries + E_BOXES, x
+    stz z:iphase
+    stz z:sby
+    stz z:sbx
+    bra build_from
+
+resume_entry:
+    ldx z:entry
+    lda f:entries + E_RESUME, x
+    and #$00FF
+    dec
+    sta z:iphase
+    lda f:entries + E_RESUME + 1, x
+    and #$00FF
+    sta z:sby
+    lda f:entries + E_RESUME + 2, x
+    and #$00FF
+    sta z:sbx
+
+build_from:
+    ldx z:entry
+    lda #0
+    sta f:entries + E_RESUME, x
+    sta f:entries + E_RESUME + 2, x
+    jsr find_phases
+@group:
+    ldx z:iphase
+    lda f:phases, x
+    and #$00FF
+    sta z:phase
     jsr measure
-    bcs @skip               ; not on one grid, or too big
+    bcs :+                  ; too big
     jsr fill_grid
     jsr cut_boxes
-@skip:
+    bcs @done               ; stopped
+:   stz z:sby
+    stz z:sbx
+    inc z:iphase
+    lda z:iphase
+    cmp z:nphase
+    bcc @group
+@done:
     rts
 
-; The frame's extent; carry set if its pieces are not on one grid or it
-; spans more than GRID cells.
+; The groups' phases, in order of first appearance, into phases (nphase).
+find_phases:
+    lda [map]
+    xba
+    inc
+    sta z:pieces
+    stz z:nphase
+    ldy #2
+@piece:
+    jsr piece
+    jsr piece_phase
+    sep #$20
+    .a8
+    ldx #0
+:   cpx z:nphase
+    beq @new
+    cmp f:phases, x
+    beq @next
+    inx
+    bra :-
+@new:
+    cpx #MAX_PHASES
+    beq @next
+    sta f:phases, x
+    inc z:nphase
+@next:
+    rep #$20
+    .a16
+    dec z:pieces
+    bne @piece
+    rts
+
+; A = the piece's phase: (px & 7) | (pyy & 7) << 3.
+piece_phase:
+    lda z:pyy
+    and #7
+    asl
+    asl
+    asl
+    sta z:t0
+    lda z:px
+    and #7
+    ora z:t0
+    rts
+
+; The group's extent (the pieces in phase); carry set if it spans more
+; than GRID cells across or GRID_H down.
 measure:
     lda [map]
     xba
     inc
     sta z:pieces
     ldy #2
+@first:
     jsr piece
-    lda z:px                ; the first piece starts the extent
-    sta z:first_x
+    jsr piece_phase
+    cmp z:phase
+    beq :+
+    dec z:pieces            ; (the group has a piece: it ends the search)
+    bra @first
+:   lda z:px                ; the first piece starts the extent
     sta z:min_x
     sta z:max_x
     lda z:pyy
-    sta z:first_y
     sta z:min_y
     sta z:max_y
 @piece:
-    lda z:px
-    sec
-    sbc z:first_x
-    and #7
-    bne @off_grid
-    lda z:pyy
-    sec
-    sbc z:first_y
-    and #7
-    bne @off_grid
     lda z:px
     cmp z:min_x
     bpl :+
@@ -799,9 +926,14 @@ measure:
     cmp z:max_y
     bmi :+
     sta z:max_y
-:   dec z:pieces
+:
+@next:
+    dec z:pieces
     beq @done
     jsr piece
+    jsr piece_phase
+    cmp z:phase
+    bne @next
     bra @piece
 @done:
     lda z:max_x
@@ -812,7 +944,7 @@ measure:
     lsr
     sta z:gw
     cmp #GRID + 1
-    bcs @off_grid
+    bcs @big
     lda z:max_y
     sec
     sbc z:min_y
@@ -820,11 +952,11 @@ measure:
     lsr
     lsr
     sta z:gh
-    cmp #GRID + 1
-    bcs @off_grid
+    cmp #GRID_H + 1
+    bcs @big
     clc
     rts
-@off_grid:
+@big:
     sec
     rts
 
@@ -869,12 +1001,18 @@ piece:
 ; end up on top. A cell holds the Genesis entry (attributes and tile);
 ; cells_used says it is used (1), or drawn already (2).
 fill_grid:
+    lda z:gh                ; the rows in use cleared
+    xba
+    lsr
+    lsr
+    lsr                     ; x GRID
+    sta z:t0
     ldx #0
     lda #0
 :   sta f:cells_used, x
     inx
     inx
-    cpx #GRID * GRID
+    cpx z:t0
     bcc :-
     lda [map]
     xba
@@ -889,7 +1027,11 @@ fill_grid:
     inc
     tay
     jsr piece
-    stz z:col
+    jsr piece_phase
+    cmp z:phase
+    beq :+
+    jmp @next_piece         ; another group's
+:   stz z:col
 @col:
     stz z:row
 @row:
@@ -950,6 +1092,7 @@ fill_grid:
     asl
     asl
     asl
+    asl
     asl                     ; x GRID
     clc
     adc z:t0
@@ -968,38 +1111,61 @@ fill_grid:
     inc z:row
     lda z:row
     cmp z:ph
-    bcc @row
-    inc z:col
+    bcs :+
+    jmp @row
+:   inc z:col
     lda z:col
     cmp z:pw
-    bcs :+
+    bcs @next_piece
     jmp @col
-:   dec z:pieces
+@next_piece:
+    dec z:pieces
     bmi :+
     jmp @piece
 :   rts
 
-; Each 2x2 group of cells becomes an OBJ per palette and priority in it.
+; Each 2x2 group of cells becomes an OBJ per palette and priority in it,
+; from row sby, column sbx on; carry set if the build stopped: for this
+; frame (E_RESUME set), or for good (out of boxes; out of blocks: built
+; again next frame).
 cut_boxes:
-    stz z:by
+    lda z:sby
+    sta z:by
+    lda z:sbx
+    sta z:bx
+    bra @group
 @by:
     stz z:bx
+@group:
+    lda #1
+    sta z:gfresh
 @bx:
     ; the first used cell of the group not drawn yet gives the key
     stz z:quad
 @find:
     jsr quad_cell
-    bcs :+
+    bcs @next_quad
     lda f:cells, x
     and #$E000              ; priority and palette
     sta z:key
-    jsr new_block
+    jsr find_twin           ; the same cells as a box before: its block
+    bcs :+
+    jsr add_box
+    bcs @boxes_full
+    bra @bx
+:   lda z:gfresh            ; the group's first new block: room for four?
+    beq :+
+    stz z:gfresh
+    jsr room4
+    bcs @suspend
+:   jsr new_block
     bcs @full
     jsr compose
     jsr add_box
-    bcs @full
+    bcs @boxes_full
     bra @bx                 ; (again: cells with another key may remain)
-:   inc z:quad
+@next_quad:
+    inc z:quad
     lda z:quad
     cmp #4
     bcc @find
@@ -1009,7 +1175,7 @@ cut_boxes:
     asl
     cmp z:gw
     bcs :+
-    jmp @bx
+    jmp @group
 :   lda z:by
     inc
     sta z:by
@@ -1017,11 +1183,236 @@ cut_boxes:
     cmp z:gh
     bcs :+
     jmp @by
-:   rts
+:   clc
+    rts
+@suspend:
+    ldx z:entry             ; go on from this group next frame
+    sep #$20
+    .a8
+    lda z:iphase
+    inc
+    sta f:entries + E_RESUME, x
+    lda z:by
+    sta f:entries + E_RESUME + 1, x
+    lda z:bx
+    sta f:entries + E_RESUME + 2, x
+    rep #$20
+    .a16
+    sec
+    rts
 @full:
-    ldx z:entry             ; out of blocks or boxes: try again next frame
+    ldx z:entry             ; out of blocks: try again next frame
     lda #$FFFF
     sta f:entries + E_SUM, x
+@boxes_full:
+    sec
+    rts
+
+; The attribute byte of a box with key: priority 3 for high, 2 for low;
+; palette << 1.
+key_attr:
+    lda z:key
+    and #$6000
+    xba
+    lsr
+    lsr
+    lsr
+    lsr
+    sta z:t0
+    lda z:key
+    and #$8000
+    beq :+
+    lda #$30
+    bra :++
+:   lda #$20
+:   ora z:t0
+    rts
+
+; A = the entry of cell quad of group bx, by if it is used with key, else
+; 0 (zero flag set); X = its index if so.
+cell_of:
+    lda z:quad
+    and #1
+    sta z:t0
+    lda z:bx
+    asl
+    clc
+    adc z:t0
+    cmp z:gw
+    bcs @no
+    sta z:t0                ; cell x
+    lda z:quad
+    lsr
+    sta z:t1
+    lda z:by
+    asl
+    clc
+    adc z:t1
+    cmp z:gh
+    bcs @no
+    asl
+    asl
+    asl
+    asl
+    asl                     ; x GRID
+    clc
+    adc z:t0
+    tax
+    lda f:cells_used, x
+    and #$00FF
+    beq @no
+    txa
+    asl
+    tax
+    lda f:cells, x
+    and #$E000
+    cmp z:key
+    bne @no
+    lda f:cells, x
+    ora #0
+    rts
+@no:
+    lda #0
+    rts
+
+; If a box of the entry from this group (iphase) has the same cells for key
+; as group bx, by, share its block: carry clear, block set (one user
+; more), the cells marked drawn and qmask set as compose would.
+find_twin:
+    ldy #0                  ; this group's four cells (Y: quad x2)
+    stz z:qmask
+:   tya
+    lsr
+    sta z:quad
+    jsr cell_of
+    tyx
+    sta f:twin_cells, x
+    cmp #0
+    beq :+
+    ldx z:quad
+    lda f:quad_bits, x
+    and #$00FF
+    tsb z:qmask
+:   iny
+    iny
+    cpy #8
+    bcc :--
+    jsr key_attr
+    sta z:tw_attr
+    lda z:bx
+    sta z:tw_bx
+    lda z:by
+    sta z:tw_by
+    ldx z:entry
+    lda f:entries + E_BOXES, x
+    bne :+
+    jmp @none
+:   sta z:nbox
+    txa
+    clc
+    adc #E_BOX
+    sta z:tw_box
+@box:
+    ldx z:tw_box
+    lda f:entries + 7, x    ; this group's, with these attributes?
+    and #$00FF
+    cmp z:iphase
+    bne @next
+    lda f:entries + 1, x
+    and #$00FF
+    cmp z:tw_attr
+    bne @next
+    lda f:entries + 2, x    ; its group of cells
+    sec
+    sbc z:min_x
+    lsr
+    lsr
+    lsr
+    lsr
+    sta z:bx
+    lda f:entries + 4, x
+    sec
+    sbc z:min_y
+    lsr
+    lsr
+    lsr
+    lsr
+    sta z:by
+    ldy #0
+:   tya
+    lsr
+    sta z:quad
+    jsr cell_of
+    tyx
+    cmp f:twin_cells, x
+    bne @next
+    iny
+    iny
+    cpy #8
+    bcc :-
+    ; found: share its block, the cells drawn
+    lda z:tw_bx
+    sta z:bx
+    lda z:tw_by
+    sta z:by
+    ldx z:tw_box
+    lda f:entries, x
+    and #$00FF
+    sta z:block
+    tax
+    sep #$20
+    .a8
+    lda f:block_owner, x
+    inc
+    sta f:block_owner, x
+    rep #$20
+    .a16
+    stz z:quad
+:   jsr cell_of
+    beq :+
+    txa
+    lsr
+    tax
+    sep #$20
+    .a8
+    lda #2                  ; drawn
+    sta f:cells_used, x
+    rep #$20
+    .a16
+:   inc z:quad
+    lda z:quad
+    cmp #4
+    bcc :--
+    clc
+    rts
+@next:
+    lda z:tw_box
+    clc
+    adc #8
+    sta z:tw_box
+    dec z:nbox
+    beq @none
+    jmp @box
+@none:
+    lda z:tw_bx
+    sta z:bx
+    lda z:tw_by
+    sta z:by
+    sec
+    rts
+
+; Carry clear if this frame can still take 4 blocks (budget and uploads).
+room4:
+    lda z:budget
+    cmp #4
+    bcc @no
+    lda #4 * (128 + 2 * UPLOAD_ITEM) - UPLOAD_ITEM
+    jsr upload_fits_main
+    bcc @no
+    clc
+    rts
+@no:
+    sec
     rts
 
 ; Cell quad (0-3: left/right, top/bottom) of group bx, by: carry clear and
@@ -1050,6 +1441,7 @@ quad_cell:
     asl
     asl
     asl
+    asl                     ; x GRID
     clc
     adc z:t0
     tax
@@ -1071,24 +1463,35 @@ quad_cell:
 new_block:
     lda z:budget
     beq @none
-    lda #128                ; its tiles must reach VRAM this frame
-    jsr upload_fits_main
+    lda #128 + UPLOAD_ITEM  ; its tiles must reach VRAM this frame (two
+    jsr upload_fits_main    ; entries)
     bcc @none
 @search:
-    ldx #0
+    phy                     ; from past the last one taken, round once
+    ldx z:bnext
+    ldy #BLOCKS
 :   lda f:block_owner, x
     and #$00FF
     beq @take
     inx
     cpx #BLOCKS
-    bcc :-
+    bcc :+
+    ldx #0
+:   dey
+    bne :--
+    ply
     jsr evict               ; none free: free the frame drawn longest ago
     bcc @search
 @none:
     sec
     rts
 @take:
+    ply
     stx z:block
+    txa
+    inc
+    and #BLOCKS - 1
+    sta z:bnext
     sep #$20
     .a8
     lda #1
@@ -1230,6 +1633,8 @@ compose:
     clc
     adc #128
     sta z:stage_pos
+    lda f:SA1_DP + up_count ; (the list being built carries them)
+    sta z:stage_list
     rts
 
 quad_bits: .byte 1, 2, 4, 8
@@ -1252,21 +1657,7 @@ add_box:
     clc
     adc #E_BOX
     tax
-    lda z:key               ; priority 3 for high, 2 for low; palette
-    and #$6000
-    xba
-    lsr
-    lsr
-    lsr
-    lsr                     ; palette << 1
-    sta z:t0
-    lda z:key
-    and #$8000
-    beq :+
-    lda #$30
-    bra :++
-:   lda #$20
-:   ora z:t0
+    jsr key_attr
     xba
     ora z:block             ; block, attributes
     sta f:entries, x
@@ -1286,14 +1677,32 @@ add_box:
     clc
     adc z:min_y
     sta f:entries + 4, x
-    lda z:qmask             ; all four: one 16x16
-    cmp #$0F
-    bne :+
+    lda z:qmask             ; one quad: an 8x8; more: one 16x16 (the
+    cmp #1                  ; others blank), which saves OBJs
+    beq :+
+    cmp #2
+    beq :+
+    cmp #4
+    beq :+
+    cmp #8
+    beq :+
     lda #0
-:   sta f:entries + 6, x
+:   sta z:t0
+    lda z:iphase            ; (and the group)
+    xba
+    ora z:t0
+    sta f:entries + 6, x
     clc
     rts
 @full:
+    ldx z:block             ; (the block goes back)
+    sep #$20
+    .a8
+    lda f:block_owner, x
+    dec
+    sta f:block_owner, x
+    rep #$20
+    .a16
     sec
     rts
 
@@ -1310,84 +1719,73 @@ stage_blank:
     rts
 
 ; The SNES form of Genesis entry A's tile at dst, flipped as the entry
-; says.
+; says: rows 0-7 of planes 0 and 1, then of planes 2 and 3, a word each;
+; V flip reverses the rows, H flip mirrors each byte.
 stage_tile:
     sta z:t1
     and #$07FF
     jsr planar
-    ; src = its SNES form; rows in order or reversed, bytes as they are or
-    ; mirrored
-    lda z:t1
-    and #$1000
-    beq :+
-    lda #14                 ; V flip: the source rows from the bottom
-:   sta z:row               ; source row x2
-    stz z:col               ; destination row x2
-@row:
-    ldy z:row
-    lda [src], y            ; planes 0, 1
-    jsr flip_h
-    ldx z:col
-    phx
-    pha
-    txa
+    lda z:dst
     clc
-    adc z:dst
-    tax
-    pla
-    sta f:sprite_staging, x
-    tya
-    clc
-    adc #16
-    tay
-    lda [src], y            ; planes 2, 3
-    jsr flip_h
-    sta f:sprite_staging + 16, x
-    plx
-    inx
-    inx
-    stx z:col
+    adc #.loword(sprite_staging)
+    sta z:sptr
+    lda #^sprite_staging
+    adc #0
+    sta z:sptr + 2
+    ldx z:dst
     lda z:t1
-    and #$1000
-    beq :+
-    lda z:row
-    dec
-    dec
-    bra :++
-:   lda z:row
-    inc
-    inc
-:   sta z:row
-    lda z:col
-    cmp #16
-    bcc @row
-    rts
-
-; Both bytes of A mirrored if the entry (t1) is H-flipped.
-flip_h:
-    pha
-    lda z:t1
-    and #$0800
+    and #$1800
+    beq @plain
+    cmp #$1000
     bne :+
-    pla
+    jmp @v
+:   jmp @h
+@plain:
+.repeat 16, i
+    ldy #2 * i
+    lda [src], y
+    sta f:sprite_staging + 2 * i, x
+.endrep
     rts
-:   pla
-    phx
-    pha
-    and #$00FF
+@v:
+.repeat 16, i
+    ldy #(i & 8) * 2 + 14 - (i & 7) * 2
+    lda [src], y
+    sta f:sprite_staging + 2 * i, x
+.endrep
+    rts
+@h:                         ; bytes through reverse_bits, rows reversed
+    sep #$20                ; too with V
+    .a8
+    lda #0
+    xba                     ; (B = 0: tax takes the byte alone)
+    lda z:t1 + 1
+    and #$10
+    beq :+
+    jmp @hv
+:
+.repeat 32, i
+    ldy #i
+    lda [src], y
     tax
     lda f:reverse_bits, x
-    and #$00FF
-    sta z:t0
-    pla
-    xba
-    and #$00FF
+    sta [sptr], y
+.endrep
+    rep #$20
+    .a16
+    rts
+@hv:
+    .a8
+.repeat 32, i
+    ldy #(i & 16) + 14 - (i & 14) + (i & 1)
+    lda [src], y
     tax
     lda f:reverse_bits, x
-    xba
-    and #$FF00
-    ora z:t0
-    plx
+    ldy #i
+    sta [sptr], y
+.endrep
+    rep #$20
+    .a16
     rts
 
 reverse_bits:
@@ -1404,6 +1802,7 @@ planar:
     asl
     asl
     sta z:src
+    sta z:vptr
     lda #^PLANAR
     sta z:src + 2
     plx                     ; the tile
@@ -1418,77 +1817,39 @@ planar:
     sta f:planar_gen, x
     rep #$20
     .a16
-    ; the Genesis tile (src's offset in the VRAM copy) into SNES planes
-    ldy #0
-@row:
-    tyx                     ; (reuse: X = src byte)
-    phy
-    tya
-    clc
-    adc z:src
-    tax
-    lda f:VRAM_MIRROR, x
+    lda #^VRAM_MIRROR
+    sta z:vptr + 2
+    ; the Genesis tile (src's offset in the VRAM copy) into SNES planes:
+    ; each of a row's 4 bytes (2 pixels) through its table
+.repeat 8, r
+.repeat 4, b
+    ldy #4 * r + b
+    lda [vptr], y
     and #$00FF
     asl
     asl
-    phx
     tax
-    lda f:planar_lut, x
+    lda f:planar_lut + $400 * b, x
+.if b = 0
     sta z:row01
-    lda f:planar_lut + 2, x
+.else
+    tsb z:row01
+.endif
+    lda f:planar_lut + $400 * b + 2, x
+.if b = 0
     sta z:row23
-    plx
-    lda f:VRAM_MIRROR + 1, x
-    and #$00FF
-    asl
-    asl
-    phx
-    tax
-    lda f:planar_lut + $400, x
-    tsb z:row01
-    lda f:planar_lut + $402, x
+.else
     tsb z:row23
-    plx
-    lda f:VRAM_MIRROR + 2, x
-    and #$00FF
-    asl
-    asl
-    phx
-    tax
-    lda f:planar_lut + $800, x
-    tsb z:row01
-    lda f:planar_lut + $802, x
-    tsb z:row23
-    plx
-    lda f:VRAM_MIRROR + 3, x
-    and #$00FF
-    asl
-    asl
-    tax
-    lda f:planar_lut + $C00, x
-    tsb z:row01
-    lda f:planar_lut + $C02, x
-    tsb z:row23
-    pla                     ; row x4 -> x2
-    pha
-    lsr
-    tay
+.endif
+.endrep
+    ldy #2 * r
     lda z:row01
     sta [src], y
-    tya
-    clc
-    adc #16
-    tay
+    ldy #2 * r + 16
     lda z:row23
     sta [src], y
-    pla
-    clc
-    adc #4
-    tay
-    cpy #32
-    bcs :+
-    jmp @row
-:   rts
+.endrep
+    rts
 
 .segment "BWRAM"
 oam:            .res 512
@@ -1496,6 +1857,8 @@ oam_high:       .res 32
 planar_gen:     .res 2048       ; tile_gen when the tile was converted
 block_owner:    .res BLOCKS
 entries:        .res ENTRIES * ENTRY_SIZE
-cells:          .res GRID * GRID * 2
-cells_used:     .res GRID * GRID
+cells:          .res GRID * GRID_H * 2
+cells_used:     .res GRID * GRID_H
+phases:         .res MAX_PHASES
+twin_cells:     .res 8          ; find_twin: the group's four cells
 sprite_staging: .res BLOCK_BUDGET * 128

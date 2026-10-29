@@ -70,7 +70,7 @@ uint16_t drv_ix;            /* the current track; persists as the Z80's IX did *
 #define T(n) RAM(drv_ix + (n))
 
 static uint8_t rd(uint16_t a) { return z80_read(a); }
-static uint16_t rd16(uint16_t a) { return (uint16_t)(rd(a) | rd((uint16_t)(a + 1)) << 8); }
+static uint16_t z80_rd16(uint16_t a) { return (uint16_t)(rd(a) | rd((uint16_t)(a + 1)) << 8); }
 
 /* ------------------------------------------------------------ hardware */
 
@@ -119,7 +119,7 @@ static void psg(uint8_t v) { z80_write(0x7F11, v); }
    go through it ($1039), then back to the song data at $78000 ($1015). */
 static void bank_io(void)
 {
-    int k;
+    uint16_t k;
     for (k = 0; k < 7; k++)
         z80_write(0x6000, 0);
     z80_write(0x6000, 1);
@@ -129,7 +129,7 @@ static void bank_io(void)
 void drv_bank_music(void)
 {
     uint8_t v = 0x07;
-    int k;
+    uint16_t k;
     z80_write(0x6000, 1);
     for (k = 0; k < 8; k++) {
         z80_write(0x6000, v);
@@ -181,14 +181,14 @@ static void voice_write(uint16_t p, uint8_t ch)
 
 static uint16_t voice_ptr(uint8_t voice)         /* $0BE4 */
 {
-    return rd16((uint16_t)(rd16(0x8006) + (uint8_t)(2 * voice)));
+    return z80_rd16((uint16_t)(z80_rd16(0x8006) + (uint8_t)(2 * voice)));
 }
 
 /* ----------------------------------------------------------- PSG, init */
 
 static void psg_silence(void)                    /* $0C78 */
 {
-    int k;
+    uint16_t k;
     bank_io();
     for (k = 0; k < 10; k++)
         psg(rd((uint16_t)(0x0D55 + k)));
@@ -214,7 +214,7 @@ static void fm_init(void)
 void drv_stop_all(void)
 {
     uint8_t timer;
-    int k;
+    uint16_t k;
     RAM(0x1C0A) = 0;
     timer = RAM(0x1C3C);
     for (k = 0; k < 0x2E0; k++)
@@ -329,7 +329,7 @@ static void fm3_freq(void)
 {
     static const uint16_t offsets[4] = { 0, 0x132, 0x18E, 0x1E4 };
     uint16_t table = (T(T_CHANNEL) & 8) ? 0x1C13 : 0x1C0F;
-    int k;
+    uint16_t k;
     if ((T(T_CHANNEL) & 7) != 2)
         z80_fault("FM3 special mode on another channel (the original hangs)", drv_ix);
     for (k = 0; k < 4; k++) {
@@ -361,7 +361,7 @@ static void fm_freq_update(void)
     uint8_t env = (uint8_t)(T(T_FREQ_ENV) - 1);
     uint16_t f = track_freq();
     if (!(env & 0x80) &&
-        !freq_env(rd16((uint16_t)(rd16(0x8008) + 2 * env)), &f))
+        !freq_env(z80_rd16((uint16_t)(z80_rd16(0x8008) + 2 * env)), &f))
         return;
     fm_freq(f);
 }
@@ -444,7 +444,7 @@ static int track_end(void);
 /* Effects starting take their channel; the music track is marked ($0F5F). */
 static uint16_t track_load(uint16_t src, uint16_t dst)  /* $0FE2: returns src */
 {
-    int k;
+    uint16_t k;
     drv_ix = src;
     for (k = 0; k < 9; k++)
         RAM(dst + k) = rd((uint16_t)(src + k));
@@ -469,7 +469,7 @@ static void tracks_load(uint16_t src, uint16_t dst)     /* $0FD5 */
 static void engine_stop(void)                    /* $01D7 */
 {
     static const uint8_t off[7] = { 0xDF, 0xFF, 0xBF, 0xA0, 0x00, 0xC0, 0x00 };
-    int k;
+    uint16_t k;
     for (k = 0; k < 7; k++)
         psg(off[k]);
     RAM(0x1C30) = 0;
@@ -598,7 +598,7 @@ static int command(uint8_t cmd)
         }
         return H_NEXT;
     case 0xF6:                                   /* jump ($099C) */
-        pos = (uint16_t)(rd16(pos) - 1);
+        pos = (uint16_t)(z80_rd16(pos) - 1);
         return H_NEXT;
     case 0xF7: {                                 /* loop: counter, count, address ($0C1F) */
         uint16_t c = (uint16_t)(drv_ix + (uint8_t)(rd(pos) + T_LOOPS));
@@ -607,13 +607,13 @@ static int command(uint8_t cmd)
             RAM(c) = rd(pos);
         pos++;
         if (--RAM(c))
-            pos = (uint16_t)(rd16(pos) - 1);
+            pos = (uint16_t)(z80_rd16(pos) - 1);
         else
             pos++;
         return H_NEXT;
     }
     case 0xF8: {                                 /* call ($0BF1) */
-        uint16_t target = rd16(pos);
+        uint16_t target = z80_rd16(pos);
         uint8_t sp;
         pos++;
         sp = --T(T_STACK);
@@ -625,7 +625,7 @@ static int command(uint8_t cmd)
     }
     case 0xF9: {                                 /* return ($0C0C) */
         uint16_t p = (uint16_t)(drv_ix + T(T_STACK));
-        pos = rd16(p);
+        pos = z80_rd16(p);
         T(T_STACK) += 2;
         return H_NEXT;
     }
@@ -670,10 +670,10 @@ static int command(uint8_t cmd)
 static void drum_voice(uint8_t note)
 {
     uint16_t src;
-    int k;
+    uint16_t k;
     note = (uint8_t)(note - 0x81);
     T(T_FREQ_HI) = note;
-    src = rd16((uint16_t)(0x12C1 + (uint8_t)(2 * note)));
+    src = z80_rd16((uint16_t)(0x12C1 + (uint8_t)(2 * note)));
     for (k = 0; k < 9; k++)
         RAM(0x1DE0 + k) = rd((uint16_t)(src + k));
     RAM(0x1DE0 + T_STACK) = 0x30;
@@ -681,7 +681,7 @@ static void drum_voice(uint8_t note)
     RAM(0x1DE0 + T_TIMER) = 0;
     RAM(0x1DE0 + T_VOL_POS) = 0;
     RAM(0x1DE0 + T_FREQ_POS) = 0;
-    fm1_regs(rd16((uint16_t)(0x12D7 + (uint8_t)(2 * RAM(0x1DE7)))), 2);
+    fm1_regs(z80_rd16((uint16_t)(0x12D7 + (uint8_t)(2 * RAM(0x1DE7)))), 2);
 }
 
 /*
@@ -956,7 +956,7 @@ static void psg_update(void)                     /* $054D */
     if (T(T_PSG_VOL) != 0xFF) {
         uint8_t e = (uint8_t)(T(T_VOICE) - 1);
         if (!(e & 0x80)) {
-            int v = vol_env(rd16((uint16_t)(rd16(0x800A) + 2 * e)));
+            int v = vol_env(z80_rd16((uint16_t)(z80_rd16(0x800A) + 2 * e)));
             if (v == -1) {
                 psg_mute();
                 return;
@@ -973,7 +973,7 @@ static void psg_update(void)                     /* $054D */
     if (!(env & 0x80)) {
         if (!f)
             T(T_ENV_END) = 0xFF;
-        else if (!freq_env(rd16((uint16_t)(rd16(0x8008) + 2 * env)), &f))
+        else if (!freq_env(z80_rd16((uint16_t)(z80_rd16(0x8008) + 2 * env)), &f))
             return;
     }
     if (T(T_FLAGS) & 0x40)
@@ -1021,7 +1021,7 @@ static void track_update_fm3(void)
 
 static void tracks_update(void)                  /* $0205 */
 {
-    int n;
+    uint16_t n;
     drv_ix = TRACKS;
     for (n = 14; n; n--, drv_ix += T_SIZE) {
         if (!(T(T_FLAGS) & 0x80))
@@ -1106,8 +1106,8 @@ static void music_start(uint8_t id)              /* $0EEC */
     if (song & 0x80)
         return;
     drv_stop_all();
-    RAM(0x1C01) = RAM(0x1C02) = rd((uint16_t)(rd16(0x8002) + song));
-    tracks_load(rd16((uint16_t)(rd16(0x8004) + (uint8_t)(2 * song))), TRACKS);
+    RAM(0x1C01) = RAM(0x1C02) = rd((uint16_t)(z80_rd16(0x8002) + song));
+    tracks_load(z80_rd16((uint16_t)(z80_rd16(0x8004) + (uint8_t)(2 * song))), TRACKS);
     sound_done();
 }
 
@@ -1118,7 +1118,7 @@ static void sfx_start(uint8_t id)
     uint8_t n;
     if (id == 0x9C)
         RAM(0x1C30) = 0;
-    p = rd16((uint16_t)(0x16D9 + (uint8_t)(2 * (id - 0x90))));
+    p = z80_rd16((uint16_t)(0x16D9 + (uint8_t)(2 * (id - 0x90))));
     n = rd(p++);
     do {
         uint8_t ch = rd(++p), c;
@@ -1134,8 +1134,8 @@ static void sfx_start(uint8_t id)
         }
         c = ch & 7;
         key_off(c);
-        RAM(rd16((uint16_t)(0x0EA9 + 2 * c))) |= 4;
-        p = track_load((uint16_t)(p - 1), rd16((uint16_t)(0x0E9B + 2 * c)));
+        RAM(z80_rd16((uint16_t)(0x0EA9 + 2 * c))) |= 4;
+        p = track_load((uint16_t)(p - 1), z80_rd16((uint16_t)(0x0E9B + 2 * c)));
     } while (--n);
     sound_done();
 }
@@ -1149,7 +1149,7 @@ static void sfx2_start(uint8_t id)
         RAM(0x1C03) = RAM(0x1C39);
         return;
     }
-    p = rd16((uint16_t)(0x1709 + (uint8_t)(2 * (RAM(0x1C03) - 0xA8))));
+    p = z80_rd16((uint16_t)(0x1709 + (uint8_t)(2 * (RAM(0x1C03) - 0xA8))));
     n = rd(p);
     ch = rd((uint16_t)(p + 2));
     /* one track on FM3/FM5/FM6: that channel's effect track; otherwise
@@ -1164,7 +1164,7 @@ static void sfx2_start(uint8_t id)
 
 static void engine_start(void)                   /* $01C3 */
 {
-    int k;
+    uint16_t k;
     RAM(0x1C30) = 0x99;
     sfx_start(0x99);
     for (k = 0; k < 12; k++)
@@ -1176,7 +1176,7 @@ static void fade_start(void)                     /* $116C */
     static const uint16_t tracks[10] = {
         0x1CC0, 0x1DE0, 0x1E10, 0x1E40, 0x1E70, 0x1EA0, 0x1ED0, 0x1D50, 0x1D80, 0x1DB0,
     };
-    int k;
+    uint16_t k;
     RAM(0x1C0B) = 0xE0;
     RAM(0x1C0C) = 2;
     for (k = 0; k < 10; k++)
@@ -1218,7 +1218,7 @@ void drv_requests(void)
         if (!(id & 0x80))
             continue;
         RAM(0x1C3A) = id;
-        prio = rd((uint16_t)(rd16(0x8000) + (uint8_t)((id & 0x7F) - 1)));
+        prio = rd((uint16_t)(z80_rd16(0x8000) + (uint8_t)((id & 0x7F) - 1)));
         if (prio & 0x80) {
             RAM(0x1C03) = id;
             RAM(0x1C04) = RAM(0x1C05) = RAM(0x1C06) = 0;
@@ -1258,7 +1258,7 @@ static void pan_restore(void (*w)(uint8_t, uint8_t), uint8_t reg, uint16_t music
 
 static void unpause(void)                        /* $0CBA */
 {
-    int k;
+    uint16_t k;
     if (RAM(0x1C0B)) {
         RAM(0x1C0B) = 0;
         drv_stop_all();
@@ -1277,7 +1277,7 @@ static void unpause(void)                        /* $0CBA */
 /* Tempo: every so many frames the music's notes last a frame longer ($11A0). */
 static void tempo(void)
 {
-    int k;
+    uint16_t k;
     if (!RAM(0x1C01) || --RAM(0x1C01))
         return;
     RAM(0x1C01) = RAM(0x1C02);
@@ -1290,7 +1290,7 @@ static void tempo(void)
 static void fade(void)
 {
     uint16_t t;
-    int k;
+    uint16_t k;
     if (!RAM(0x1C0B))
         return;
     if (--RAM(0x1C0C))
